@@ -1,6 +1,6 @@
 {
   "name": "focus-mind-bot",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "type": "module",
   "description": "Telegram bot Focus Mind for daily/weekly/monthly reflections",
   "main": "dist/index.js",
