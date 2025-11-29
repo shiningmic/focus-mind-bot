@@ -4,6 +4,9 @@ import { Telegraf } from 'telegraf';
 import mongoose from 'mongoose';
 
 import { UserModel, type SlotConfig } from './models/user.model.js';
+import { SlotCode } from './types/core.js';
+import { getOrCreateSessionForUserSlotDate } from './services/session.service.js';
+import { ensureDefaultQuestionBlocksForUser } from './services/questionBlock.service.js';
 
 // Validate required environment variables
 const botToken = process.env.TELEGRAM_BOT_TOKEN;
@@ -94,6 +97,9 @@ bot.start(async (ctx) => {
         slots: buildDefaultSlots(),
       });
 
+      // Create default question blocks for this user
+      await ensureDefaultQuestionBlocksForUser(user._id);
+
       await ctx.reply(
         `Hello, ${firstName}! 👋\n\n` +
           `I am FocusMind — a Telegram bot for daily, weekly, and monthly self-reflection and productivity.\n\n` +
@@ -106,7 +112,7 @@ bot.start(async (ctx) => {
     } else {
       await ctx.reply(
         `Welcome back, ${firstName}! 👋\n\n` +
-          `Your FocusMind profile already exists.\n` +
+          `Your Focus Mind profile already exists.\n` +
           `Soon I will start sending you reflection sessions based on your configured slots and questions.`
       );
     }
@@ -114,6 +120,62 @@ bot.start(async (ctx) => {
     console.error('Error in /start handler:', error);
     await ctx.reply(
       'Something went wrong while initializing your profile. Please try again later.'
+    );
+  }
+});
+
+// Debug command to test session building logic for today (MORNING slot)
+bot.command('debug_today_session', async (ctx) => {
+  try {
+    const from = ctx.from;
+
+    if (!from) {
+      await ctx.reply(
+        'Unable to read your Telegram profile. Please try again later.'
+      );
+      return;
+    }
+
+    const user = await UserModel.findOne({ telegramId: from.id }).exec();
+
+    if (!user) {
+      await ctx.reply(
+        'You do not have a FocusMind profile yet. Send /start first.'
+      );
+      return;
+    }
+
+    // For now we just test MORNING slot and "today"
+    const slot: SlotCode = 'MORNING';
+
+    const today = new Date();
+    const dateKey = today.toISOString().slice(0, 10); // "YYYY-MM-DD" (UTC-based)
+
+    const session = await getOrCreateSessionForUserSlotDate(
+      user._id,
+      slot,
+      dateKey
+    );
+
+    const lines: string[] = [];
+
+    lines.push(`🧪 Debug session for ${slot} on ${dateKey}`);
+    lines.push(`Status: ${session.status}`);
+    lines.push(`Questions count: ${session.questions.length}`);
+
+    if (session.questions.length > 0) {
+      lines.push('');
+      lines.push('Questions:');
+      for (const q of session.questions) {
+        lines.push(`- [${q.sourceType}] ${q.text}`);
+      }
+    }
+
+    await ctx.reply(lines.join('\n'));
+  } catch (error) {
+    console.error('Error in /debug_today_session handler:', error);
+    await ctx.reply(
+      'Error while building debug session. Please try again later.'
     );
   }
 });

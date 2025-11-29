@@ -1,4 +1,3 @@
-// src/models/questionBlock.model.ts
 import { Schema, model, type Document, type Model, type Types } from 'mongoose';
 import type {
   QuestionItem,
