@@ -13,6 +13,10 @@ const slotOrder: Record<'MORNING' | 'DAY' | 'EVENING', number> = {
   DAY: 1,
   EVENING: 2,
 };
+const randomWindowTargets = new Map<
+  string,
+  { dateKey: string; minute: number | null }
+>();
 
 // Helper: get user's local time and dateKey in their timezone
 function getUserLocalTime(timezone: string): {
@@ -53,7 +57,11 @@ function getUserLocalTime(timezone: string): {
 }
 
 // Decide whether slot should fire now
-function isSlotDueNow(slot: SlotConfig, currentMinutes: number): boolean {
+function isSlotDueNow(
+  slot: SlotConfig,
+  currentMinutes: number,
+  targetRandomMinute?: number | null
+): boolean {
   if (slot.mode === 'FIXED') {
     return (
       typeof slot.timeMinutes === 'number' &&
@@ -62,10 +70,9 @@ function isSlotDueNow(slot: SlotConfig, currentMinutes: number): boolean {
   }
 
   if (slot.mode === 'RANDOM_WINDOW') {
-    // MVP: fire at the beginning of the window
     return (
-      typeof slot.windowStartMinutes === 'number' &&
-      currentMinutes === slot.windowStartMinutes
+      typeof targetRandomMinute === 'number' &&
+      currentMinutes === targetRandomMinute
     );
   }
 
@@ -120,6 +127,35 @@ async function skipEarlierSlotsToday(
   ).exec();
 }
 
+function getRandomWindowMinute(
+  userId: Types.ObjectId,
+  dateKey: string,
+  slot: 'MORNING' | 'DAY' | 'EVENING',
+  startMinutes?: number,
+  endMinutes?: number
+): number | null {
+  if (
+    typeof startMinutes !== 'number' ||
+    typeof endMinutes !== 'number' ||
+    startMinutes >= endMinutes
+  ) {
+    return null;
+  }
+
+  const key = `${userId.toString()}-${slot}`;
+  const cached = randomWindowTargets.get(key);
+
+  if (cached && cached.dateKey === dateKey && typeof cached.minute === 'number') {
+    return cached.minute;
+  }
+
+  const minute =
+    startMinutes + Math.floor(Math.random() * (endMinutes - startMinutes + 1));
+
+  randomWindowTargets.set(key, { dateKey, minute });
+  return minute;
+}
+
 /**
  * Start cron scheduler (every minute).
  */
@@ -168,11 +204,22 @@ export function startSlotScheduler(bot: Telegraf): void {
         );
 
         for (const slotConfig of user.slots) {
-          if (!isSlotDueNow(slotConfig, minutesSinceMidnight)) {
+          const slot = slotConfig.slot;
+
+          const randomTarget =
+            slotConfig.mode === 'RANDOM_WINDOW'
+              ? getRandomWindowMinute(
+                  user._id,
+                  dateKey,
+                  slot,
+                  slotConfig.windowStartMinutes,
+                  slotConfig.windowEndMinutes
+                )
+              : null;
+
+          if (!isSlotDueNow(slotConfig, minutesSinceMidnight, randomTarget)) {
             continue;
           }
-
-          const slot = slotConfig.slot;
 
           console.log(
             `  ⏱️ Slot ${slot} is due now for user ${user._id} at minutes=${minutesSinceMidnight}`
