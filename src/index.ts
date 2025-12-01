@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { Telegraf } from 'telegraf';
+import { Telegraf, type Context } from 'telegraf';
 import mongoose from 'mongoose';
 
 import { UserModel, type SlotConfig } from './models/user.model.js';
@@ -33,6 +33,7 @@ const DEFAULT_TIMEZONE = 'Europe/Kyiv';
 
 // Flag to ensure scheduler is started only once
 let schedulerStarted = false;
+const pendingResetConfirmation = new Set<number>();
 
 function parseTimeToMinutes(time: string): number | null {
   const match = /^(\d{1,2}):(\d{2})$/.exec(time.trim());
@@ -164,7 +165,11 @@ function formatSlotSummary(slot: SlotConfig): string {
   return `${label}: not configured`;
 }
 
-function formatSlotsForBlock(slots: { morning: boolean; day: boolean; evening: boolean }): string {
+function formatSlotsForBlock(slots: {
+  morning: boolean;
+  day: boolean;
+  evening: boolean;
+}): string {
   const active: string[] = [];
   if (slots.morning) active.push('Morning');
   if (slots.day) active.push('Day');
@@ -181,7 +186,9 @@ function formatWeekdays(days?: number[]): string {
 }
 
 function formatMonthSchedule(
-  schedule: { kind: 'DAY_OF_MONTH' | 'FIRST_DAY' | 'LAST_DAY'; dayOfMonth?: number } | undefined
+  schedule:
+    | { kind: 'DAY_OF_MONTH' | 'FIRST_DAY' | 'LAST_DAY'; dayOfMonth?: number }
+    | undefined
 ): string {
   if (!schedule) return 'not set';
   if (schedule.kind === 'FIRST_DAY') return 'first day of month';
@@ -212,6 +219,91 @@ function buildQuestionPrompt(
   const label = getSlotLabel(slot);
   const progress = total > 1 ? ` (${index + 1}/${total})` : '';
   return `🧭 ${label}${progress}\n\n${questionText}`;
+}
+
+function isValidTimezone(timezone: string): boolean {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: timezone }).format(new Date());
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function getTimezoneMinutesNow(timezone: string): number {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone,
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit',
+  }).formatToParts(new Date());
+
+  const hourStr = parts.find((p) => p.type === 'hour')?.value ?? '0';
+  const minuteStr = parts.find((p) => p.type === 'minute')?.value ?? '0';
+
+  const hours = Number.parseInt(hourStr, 10);
+  const minutes = Number.parseInt(minuteStr, 10);
+
+  if (Number.isNaN(hours) || Number.isNaN(minutes)) return 0;
+  return hours * 60 + minutes;
+}
+
+function pickNextSlotForReflection(
+  slots: SlotConfig[] | undefined,
+  nowMinutes: number
+): SlotCode | null {
+  if (!slots || slots.length === 0) return null;
+
+  const candidates = slots
+    .map((slot) => {
+      const startMinutes =
+        slot.mode === 'FIXED' ? slot.timeMinutes : slot.windowStartMinutes;
+
+      return {
+        slot: slot.slot,
+        startMinutes,
+      };
+    })
+    .filter(
+      (candidate): candidate is { slot: SlotCode; startMinutes: number } =>
+        typeof candidate.startMinutes === 'number'
+    )
+    .sort((a, b) => a.startMinutes - b.startMinutes);
+
+  if (!candidates.length) return null;
+
+  const upcoming = candidates.find((c) => c.startMinutes >= nowMinutes);
+  return (upcoming ?? candidates[0]).slot;
+}
+
+function formatSessionExportText(sessions: SessionDocument[]): string {
+  if (!sessions.length) return 'No answers found.';
+
+  const lines: string[] = [];
+
+  for (const session of sessions) {
+    const label = getSlotLabel(session.slot);
+    lines.push(`${session.dateKey} - ${label} (${session.status})`);
+
+    if (!session.answers.length) {
+      lines.push('  No answers recorded.');
+      lines.push('');
+      continue;
+    }
+
+    session.answers.forEach((answer, index) => {
+      const question =
+        session.questions.find((q) => q.key === answer.key) ||
+        session.questions[index];
+      const questionText = question?.text ?? `Question ${index + 1}`;
+      lines.push(`  Q: ${questionText}`);
+      lines.push(`  A: ${answer.text}`);
+    });
+
+    lines.push('');
+  }
+
+  return lines.join('\n').trimEnd();
 }
 
 function buildSessionCompletionSummary(session: SessionDocument): string {
@@ -250,6 +342,41 @@ async function findLatestActiveSession(
   })
     .sort({ updatedAt: -1, createdAt: -1 })
     .exec();
+}
+
+async function replyWithSessionProgress(
+  ctx: Context,
+  session: SessionDocument
+): Promise<void> {
+  if (!session.questions.length) {
+    await ctx.reply('No questions configured for this slot yet.');
+    return;
+  }
+
+  const currentIndex = Math.min(
+    session.currentQuestionIndex ?? 0,
+    session.questions.length - 1
+  );
+
+  if (currentIndex >= session.questions.length) {
+    await ctx.reply(buildSessionCompletionSummary(session));
+    return;
+  }
+
+  session.status = 'in_progress';
+  session.startedAt ||= new Date();
+  session.lastInteractionAt = new Date();
+  await session.save();
+
+  const question = session.questions[currentIndex];
+  await ctx.reply(
+    buildQuestionPrompt(
+      session.slot,
+      question.text,
+      currentIndex,
+      session.questions.length
+    )
+  );
 }
 
 function buildUpdatedSlotConfigs(
@@ -355,7 +482,7 @@ bot.start(async (ctx) => {
 
       await ctx.reply(
         `Hello, ${firstName}! 👋\n\n` +
-          `I am FocusMind — a Telegram bot for daily, weekly, and monthly self-reflection and productivity.\n\n` +
+          `I am Focus Mind — a Telegram bot for daily, weekly, and monthly self-reflection and productivity.\n\n` +
           `I have created your profile with default time slots:\n` +
           `• Morning: 09:00\n` +
           `• Day: random between 13:00–15:00\n` +
@@ -365,7 +492,7 @@ bot.start(async (ctx) => {
     } else {
       await ctx.reply(
         `Welcome back, ${firstName}! 👋\n\n` +
-          `Your FocusMind profile already exists.\n` +
+          `Your Focus Mind profile already exists.\n` +
           `Soon I will start sending you reflection sessions based on your configured slots and questions.`
       );
     }
@@ -384,6 +511,27 @@ bot.start(async (ctx) => {
   }
 });
 
+bot.command('help', async (ctx) => {
+  const lines = [
+    'Available commands:',
+    '/start - Create profile and show intro',
+    '/help - Show this list',
+    '/settings - View timezone and slot schedule',
+    '/timezone <IANA TZ> - Change your timezone',
+    '/slots <M> <D> <E> - Configure daily slots (HH:MM or HH:MM-HH:MM)',
+    '/daily /weekly /monthly - Configure question sets quickly',
+    "/today - Show today's reflection sessions status",
+    '/reflect - Start or resume a reflection session',
+    '/export [json|text] - Export your answers',
+    '/history - Recent reflection history',
+    '/reset - Reset all Focus Mind data (with confirmation)',
+    '/session_start SLOT [YYYY-MM-DD] - Manual session start',
+    '/questions_set ... - Advanced question setup',
+  ];
+
+  await ctx.reply(lines.join('\n'));
+});
+
 // Debug command to test session building logic for today (MORNING slot)
 bot.command('debug_today_session', async (ctx) => {
   try {
@@ -400,7 +548,7 @@ bot.command('debug_today_session', async (ctx) => {
 
     if (!user) {
       await ctx.reply(
-        'You do not have a FocusMind profile yet. Send /start first.'
+        'You do not have a Focus Mind profile yet. Send /start first.'
       );
       return;
     }
@@ -449,7 +597,9 @@ bot.command('session_start', async (ctx) => {
     const rawDate = parts[1];
 
     if (!rawSlot) {
-      await ctx.reply('Usage: /session_start SLOT [YYYY-MM-DD]\nExamples:\n- /session_start EVENING\n- /session_start MORNING 2025-12-31');
+      await ctx.reply(
+        'Usage: /session_start SLOT [YYYY-MM-DD]\nExamples:\n- /session_start EVENING\n- /session_start MORNING 2025-12-31'
+      );
       return;
     }
 
@@ -461,13 +611,17 @@ bot.command('session_start', async (ctx) => {
 
     const from = ctx.from;
     if (!from) {
-      await ctx.reply('Unable to read your Telegram profile. Please try again.');
+      await ctx.reply(
+        'Unable to read your Telegram profile. Please try again.'
+      );
       return;
     }
 
     const user = await UserModel.findOne({ telegramId: from.id }).exec();
     if (!user) {
-      await ctx.reply('You do not have a FocusMind profile yet. Send /start first.');
+      await ctx.reply(
+        'You do not have a Focus Mind profile yet. Send /start first.'
+      );
       return;
     }
 
@@ -487,33 +641,57 @@ bot.command('session_start', async (ctx) => {
       dateKey
     );
 
-    if (!session.questions.length) {
-      await ctx.reply('No questions configured for this slot yet.');
-      return;
-    }
-
-    const currentIndex = Math.min(
-      session.currentQuestionIndex ?? 0,
-      session.questions.length - 1
-    );
-
-    if (currentIndex >= session.questions.length) {
-      await ctx.reply(buildSessionCompletionSummary(session));
-      return;
-    }
-
-    session.status = 'in_progress';
-    session.startedAt ||= new Date();
-    session.lastInteractionAt = new Date();
-    await session.save();
-
-    const question = session.questions[currentIndex];
-    await ctx.reply(
-      buildQuestionPrompt(slot, question.text, currentIndex, session.questions.length)
-    );
+    await replyWithSessionProgress(ctx, session);
   } catch (error) {
     console.error('Error in /session_start handler:', error);
     await ctx.reply('Failed to start session. Please try again later.');
+  }
+});
+
+bot.command('reflect', async (ctx) => {
+  try {
+    const from = ctx.from;
+    if (!from) {
+      await ctx.reply(
+        'Unable to read your Telegram profile. Please try again.'
+      );
+      return;
+    }
+
+    const user = await UserModel.findOne({ telegramId: from.id }).exec();
+    if (!user) {
+      await ctx.reply(
+        'You do not have a Focus Mind profile yet. Send /start first.'
+      );
+      return;
+    }
+
+    let session = await findLatestActiveSession(user._id);
+
+    if (!session) {
+      const timezone = user.timezone || DEFAULT_TIMEZONE;
+      const nowMinutes = getTimezoneMinutesNow(timezone);
+      const slot = pickNextSlotForReflection(user.slots, nowMinutes);
+
+      if (!slot) {
+        await ctx.reply(
+          'Slots are not configured yet. Use /slots to set them up.'
+        );
+        return;
+      }
+
+      const dateKey = getDateKeyForTimezone(timezone);
+      session = await getOrCreateSessionForUserSlotDate(
+        user._id,
+        slot,
+        dateKey
+      );
+    }
+
+    await replyWithSessionProgress(ctx, session);
+  } catch (error) {
+    console.error('Error in /reflect handler:', error);
+    await ctx.reply('Failed to start reflection. Please try again later.');
   }
 });
 
@@ -570,6 +748,57 @@ bot.command('set_slots_time', async (ctx) => {
   );
 });
 
+bot.command('slots', async (ctx) => {
+  const messageText = ctx.message?.text ?? '';
+  const parts = messageText.trim().split(/\s+/).slice(1);
+
+  if (parts.length < 3) {
+    await ctx.reply(
+      'Configure morning/day/evening times.\n' +
+        'Use HH:MM for fixed or HH:MM-HH:MM for a random window.\n' +
+        'Example: /slots 08:30 13:00-15:00 20:15'
+    );
+    return;
+  }
+
+  const [morningRaw, dayRaw, eveningRaw] = parts;
+  const morningParsed = parseSlotInput(morningRaw);
+  const dayParsed = parseSlotInput(dayRaw);
+  const eveningParsed = parseSlotInput(eveningRaw);
+
+  if (!morningParsed || !dayParsed || !eveningParsed) {
+    await ctx.reply('Could not parse input. Use HH:MM or HH:MM-HH:MM formats.');
+    return;
+  }
+
+  const from = ctx.from;
+  if (!from) {
+    await ctx.reply('Unable to read your Telegram profile. Please try again.');
+    return;
+  }
+
+  const user = await UserModel.findOne({ telegramId: from.id }).exec();
+  if (!user) {
+    await ctx.reply('Create a profile first using /start');
+    return;
+  }
+
+  user.slots = buildUpdatedSlotConfigs(user.slots ?? [], {
+    MORNING: morningParsed,
+    DAY: dayParsed,
+    EVENING: eveningParsed,
+  });
+
+  await user.save();
+
+  await ctx.reply(
+    'Saved. Updated slot settings:\n' +
+      `- ${formatSlotSummary(user.slots.find((s) => s.slot === 'MORNING')!)}` +
+      `\n- ${formatSlotSummary(user.slots.find((s) => s.slot === 'DAY')!)}` +
+      `\n- ${formatSlotSummary(user.slots.find((s) => s.slot === 'EVENING')!)}`
+  );
+});
+
 // Command to create/update a question block for a slot
 bot.command('questions_set', async (ctx) => {
   const messageText = ctx.message?.text ?? '';
@@ -593,7 +822,9 @@ bot.command('questions_set', async (ctx) => {
   const slot = slotCodeFromString(slotToken);
 
   if (!type || !slot) {
-    await ctx.reply('Unknown TYPE or SLOT. TYPE: DAILY|WEEKLY|MONTHLY. SLOT: MORNING|DAY|EVENING.');
+    await ctx.reply(
+      'Unknown TYPE or SLOT. TYPE: DAILY|WEEKLY|MONTHLY. SLOT: MORNING|DAY|EVENING.'
+    );
     return;
   }
 
@@ -603,7 +834,9 @@ bot.command('questions_set', async (ctx) => {
   );
   const segments = remainder.split(/\s--/);
   const questionSegment = segments.shift()?.trim() ?? '';
-  const flags = segments.map((s) => s.replace(/^--/, '').trim()).filter(Boolean);
+  const flags = segments
+    .map((s) => s.replace(/^--/, '').trim())
+    .filter(Boolean);
 
   const questions = questionSegment
     .split('|')
@@ -616,7 +849,9 @@ bot.command('questions_set', async (ctx) => {
   }
 
   let daysOfWeek: number[] | undefined;
-  let monthSchedule: { kind: 'DAY_OF_MONTH' | 'FIRST_DAY' | 'LAST_DAY'; dayOfMonth?: number } | undefined;
+  let monthSchedule:
+    | { kind: 'DAY_OF_MONTH' | 'FIRST_DAY' | 'LAST_DAY'; dayOfMonth?: number }
+    | undefined;
   let nameOverride: string | undefined;
 
   for (const flag of flags) {
@@ -640,12 +875,16 @@ bot.command('questions_set', async (ctx) => {
       } else if (raw.startsWith('day:')) {
         const dayNum = Number.parseInt(raw.slice(4), 10);
         if (Number.isNaN(dayNum) || dayNum < 1 || dayNum > 28) {
-          await ctx.reply('month flag day value must be between 1 and 28, e.g. --month=day:10');
+          await ctx.reply(
+            'month flag day value must be between 1 and 28, e.g. --month=day:10'
+          );
           return;
         }
         monthSchedule = { kind: 'DAY_OF_MONTH', dayOfMonth: dayNum };
       } else {
-        await ctx.reply('month flag must be first|last|day:N, e.g. --month=day:10');
+        await ctx.reply(
+          'month flag must be first|last|day:N, e.g. --month=day:10'
+        );
         return;
       }
     } else if (flag.startsWith('name=')) {
@@ -661,7 +900,9 @@ bot.command('questions_set', async (ctx) => {
 
   const user = await UserModel.findOne({ telegramId: from.id }).exec();
   if (!user) {
-    await ctx.reply('You do not have a FocusMind profile yet. Send /start first.');
+    await ctx.reply(
+      'You do not have a Focus Mind profile yet. Send /start first.'
+    );
     return;
   }
 
@@ -681,7 +922,9 @@ bot.command('questions_set', async (ctx) => {
   const blockName =
     nameOverride ||
     existing?.name ||
-    `${type === 'DAILY' ? 'Daily' : type === 'WEEKLY' ? 'Weekly' : 'Monthly'} ${slot.toLowerCase()}`;
+    `${
+      type === 'DAILY' ? 'Daily' : type === 'WEEKLY' ? 'Weekly' : 'Monthly'
+    } ${slot.toLowerCase()}`;
 
   const baseQuestions = questions.map((text, index) => ({
     key: `q${index + 1}`,
@@ -701,8 +944,8 @@ bot.command('questions_set', async (ctx) => {
     }
 
     if (type === 'MONTHLY') {
-      existing.monthSchedule =
-        monthSchedule ?? existing.monthSchedule ?? { kind: 'LAST_DAY' };
+      existing.monthSchedule = monthSchedule ??
+        existing.monthSchedule ?? { kind: 'LAST_DAY' };
     } else {
       existing.monthSchedule = undefined;
     }
@@ -717,9 +960,7 @@ bot.command('questions_set', async (ctx) => {
       questions: baseQuestions,
       daysOfWeek: type === 'WEEKLY' ? daysOfWeek ?? [1] : undefined,
       monthSchedule:
-        type === 'MONTHLY'
-          ? monthSchedule ?? { kind: 'LAST_DAY' }
-          : undefined,
+        type === 'MONTHLY' ? monthSchedule ?? { kind: 'LAST_DAY' } : undefined,
     });
   }
 
@@ -730,7 +971,9 @@ bot.command('questions_set', async (ctx) => {
   ];
 
   if (type === 'WEEKLY') {
-    summaryLines.push(`Days: ${formatWeekdays(daysOfWeek ?? existing?.daysOfWeek ?? [1])}`);
+    summaryLines.push(
+      `Days: ${formatWeekdays(daysOfWeek ?? existing?.daysOfWeek ?? [1])}`
+    );
   }
 
   if (type === 'MONTHLY') {
@@ -747,6 +990,27 @@ bot.command('questions_set', async (ctx) => {
   await ctx.reply(summaryLines.join('\n'));
 });
 
+bot.command(['daily', 'weekly', 'monthly'], async (ctx) => {
+  const command =
+    ctx.message?.text?.split(/\s+/)[0]?.replace('/', '') ?? 'daily';
+  const type = command.toUpperCase();
+
+  const examples: Record<string, string> = {
+    DAILY:
+      '/questions_set DAILY MORNING What is your focus? | How do you feel?',
+    WEEKLY:
+      '/questions_set WEEKLY EVENING Weekly review? | Main challenge? --days=5',
+    MONTHLY:
+      '/questions_set MONTHLY MORNING Plan month? | Key habits? --month=last',
+  };
+
+  await ctx.reply(
+    `${type} questions setup:\n` +
+      'Use /questions_set TYPE SLOT Question1 | Question2 ...\n' +
+      `Example: ${examples[type] ?? examples.DAILY}`
+  );
+});
+
 // Command to show current settings: timezone and slot timings
 bot.command('settings', async (ctx) => {
   const from = ctx.from;
@@ -758,7 +1022,7 @@ bot.command('settings', async (ctx) => {
   const user = await UserModel.findOne({ telegramId: from.id }).exec();
   if (!user) {
     await ctx.reply(
-      'You do not have a FocusMind profile yet. Send /start first.'
+      'You do not have a Focus Mind profile yet. Send /start first.'
     );
     return;
   }
@@ -781,6 +1045,41 @@ bot.command('settings', async (ctx) => {
   await ctx.reply(lines.join('\n'));
 });
 
+bot.command('timezone', async (ctx) => {
+  const [, tz] = (ctx.message?.text ?? '').trim().split(/\s+/, 2);
+
+  if (!tz) {
+    await ctx.reply('Usage: /timezone Europe/Kyiv');
+    return;
+  }
+
+  if (!isValidTimezone(tz)) {
+    await ctx.reply(
+      'Unknown timezone. Please provide a valid IANA timezone like Europe/Kyiv or America/New_York.'
+    );
+    return;
+  }
+
+  const from = ctx.from;
+  if (!from) {
+    await ctx.reply('Unable to read your Telegram profile. Please try again.');
+    return;
+  }
+
+  const user = await UserModel.findOne({ telegramId: from.id }).exec();
+  if (!user) {
+    await ctx.reply(
+      'You do not have a Focus Mind profile yet. Send /start first.'
+    );
+    return;
+  }
+
+  user.timezone = tz;
+  await user.save();
+
+  await ctx.reply(`Timezone updated to ${tz}.`);
+});
+
 // Command to list user's question blocks
 bot.command('questions', async (ctx) => {
   const from = ctx.from;
@@ -794,7 +1093,9 @@ bot.command('questions', async (ctx) => {
 
   const user = await UserModel.findOne({ telegramId: from.id }).exec();
   if (!user) {
-    await ctx.reply('You do not have a FocusMind profile yet. Send /start first.');
+    await ctx.reply(
+      'You do not have a Focus Mind profile yet. Send /start first.'
+    );
     return;
   }
 
@@ -802,7 +1103,9 @@ bot.command('questions', async (ctx) => {
     .sort({ type: 1, createdAt: 1 })
     .exec();
 
-  const filtered = filterType ? blocks.filter((b) => b.type === filterType) : blocks;
+  const filtered = filterType
+    ? blocks.filter((b) => b.type === filterType)
+    : blocks;
 
   if (!filtered.length) {
     await ctx.reply('No question blocks found for your profile.');
@@ -838,24 +1141,208 @@ bot.command('questions', async (ctx) => {
   await ctx.reply(lines.join('\n'));
 });
 
+bot.command('export', async (ctx) => {
+  const [, modeRaw] = (ctx.message?.text ?? '').trim().split(/\s+/, 2);
+  const mode = modeRaw?.toLowerCase() === 'json' ? 'json' : 'text';
+
+  const from = ctx.from;
+  if (!from) {
+    await ctx.reply('Unable to read your Telegram profile. Please try again.');
+    return;
+  }
+
+  const user = await UserModel.findOne({ telegramId: from.id }).exec();
+  if (!user) {
+    await ctx.reply(
+      'You do not have a Focus Mind profile yet. Send /start first.'
+    );
+    return;
+  }
+
+  const sessions = await SessionModel.find({ userId: user._id })
+    .sort({ dateKey: -1, slot: 1 })
+    .limit(50)
+    .exec();
+
+  if (!sessions.length) {
+    await ctx.reply('No reflection answers to export yet.');
+    return;
+  }
+
+  const sendInChunks = async (payload: string) => {
+    const maxLen = 3500;
+    for (let i = 0; i < payload.length; i += maxLen) {
+      await ctx.reply(payload.slice(i, i + maxLen));
+    }
+  };
+
+  if (mode === 'json') {
+    const exportData = {
+      user: {
+        timezone: user.timezone,
+        slots: user.slots,
+      },
+      sessions: sessions.map((s) => ({
+        dateKey: s.dateKey,
+        slot: s.slot,
+        status: s.status,
+        questions: s.questions,
+        answers: s.answers,
+        startedAt: s.startedAt,
+        finishedAt: s.finishedAt,
+        lastInteractionAt: s.lastInteractionAt,
+      })),
+    };
+
+    const json = JSON.stringify(exportData, null, 2);
+    await sendInChunks('Here is your data (JSON):\n```\n' + json + '\n```');
+    return;
+  }
+
+  const textExport = formatSessionExportText(sessions);
+  await sendInChunks('Here is your data (text):\n' + textExport);
+});
+
+bot.command('reset', async (ctx) => {
+  const [, confirm] = (ctx.message?.text ?? '').trim().split(/\s+/, 2);
+  const from = ctx.from;
+  if (!from) {
+    await ctx.reply('Unable to read your Telegram profile. Please try again.');
+    return;
+  }
+
+  if (confirm?.toLowerCase() !== 'confirm') {
+    pendingResetConfirmation.add(from.id);
+    await ctx.reply(
+      'This will delete all your Focus Mind data (profile, slots, questions, sessions).\n' +
+        'If you want to proceed, send /reset confirm'
+    );
+    return;
+  }
+
+  if (!pendingResetConfirmation.has(from.id)) {
+    await ctx.reply(
+      'Please run /reset first, then confirm with /reset confirm.'
+    );
+    return;
+  }
+
+  const user = await UserModel.findOne({ telegramId: from.id }).exec();
+  if (!user) {
+    pendingResetConfirmation.delete(from.id);
+    await ctx.reply('No profile found to reset.');
+    return;
+  }
+
+  await Promise.all([
+    SessionModel.deleteMany({ userId: user._id }).exec(),
+    QuestionBlockModel.deleteMany({ userId: user._id }).exec(),
+    UserModel.deleteOne({ _id: user._id }).exec(),
+  ]);
+
+  pendingResetConfirmation.delete(from.id);
+  await ctx.reply(
+    'All your Focus Mind data has been reset. You can start again with /start.'
+  );
+});
+
+bot.command('today', async (ctx) => {
+  const from = ctx.from;
+  if (!from) {
+    await ctx.reply('Unable to read your Telegram profile. Please try again.');
+    return;
+  }
+
+  const user = await UserModel.findOne({ telegramId: from.id }).exec();
+  if (!user) {
+    await ctx.reply(
+      'You do not have a Focus Mind profile yet. Send /start first.'
+    );
+    return;
+  }
+
+  const timezone = user.timezone || DEFAULT_TIMEZONE;
+  const dateKey = getDateKeyForTimezone(timezone);
+  const sessions = await SessionModel.find({
+    userId: user._id,
+    dateKey,
+  })
+    .sort({ slot: 1 })
+    .exec();
+
+  if (!sessions.length) {
+    await ctx.reply('No reflections for today yet. Use /reflect to begin.');
+    return;
+  }
+
+  const lines = [`Status for ${dateKey}:`];
+
+  for (const session of sessions) {
+    const label = getSlotLabel(session.slot);
+    lines.push(`- ${label}: ${session.status}`);
+  }
+
+  await ctx.reply(lines.join('\n'));
+});
+
+bot.command('history', async (ctx) => {
+  const from = ctx.from;
+  if (!from) {
+    await ctx.reply('Unable to read your Telegram profile. Please try again.');
+    return;
+  }
+
+  const user = await UserModel.findOne({ telegramId: from.id }).exec();
+  if (!user) {
+    await ctx.reply(
+      'You do not have a Focus Mind profile yet. Send /start first.'
+    );
+    return;
+  }
+
+  const sessions = await SessionModel.find({ userId: user._id })
+    .sort({ dateKey: -1, slot: 1 })
+    .limit(10)
+    .exec();
+
+  if (!sessions.length) {
+    await ctx.reply('No reflection history yet.');
+    return;
+  }
+
+  const lines = ['Recent reflections:'];
+  for (const session of sessions) {
+    const label = getSlotLabel(session.slot);
+    lines.push(`- ${session.dateKey} ${label}: ${session.status}`);
+  }
+
+  await ctx.reply(lines.join('\n'));
+});
+
 // Text messages are treated as answers to an active session
 bot.on('text', async (ctx) => {
   try {
     const from = ctx.from;
     if (!from) {
-      await ctx.reply('Unable to read your Telegram profile. Please try again.');
+      await ctx.reply(
+        'Unable to read your Telegram profile. Please try again.'
+      );
       return;
     }
 
     const user = await UserModel.findOne({ telegramId: from.id }).exec();
     if (!user) {
-      await ctx.reply('You do not have a FocusMind profile yet. Send /start first.');
+      await ctx.reply(
+        'You do not have a Focus Mind profile yet. Send /start first.'
+      );
       return;
     }
 
     const session = await findLatestActiveSession(user._id);
     if (!session || !session.questions.length) {
-      await ctx.reply('No active reflection session right now. Use /session_start SLOT to begin one.');
+      await ctx.reply(
+        'No active reflection session right now. Use /session_start SLOT to begin one.'
+      );
       return;
     }
 
@@ -880,7 +1367,11 @@ bot.on('text', async (ctx) => {
 
     const now = new Date();
     session.answers = session.answers.filter((a) => a.key !== question.key);
-    session.answers.push({ key: question.key, text: answerText, createdAt: now });
+    session.answers.push({
+      key: question.key,
+      text: answerText,
+      createdAt: now,
+    });
     session.currentQuestionIndex = currentIndex + 1;
     session.status =
       session.currentQuestionIndex >= session.questions.length
@@ -919,7 +1410,9 @@ bot.on('text', async (ctx) => {
     );
   } catch (error) {
     console.error('Error while handling text message:', error);
-    await ctx.reply('Something went wrong while processing your answer. Please try again.');
+    await ctx.reply(
+      'Something went wrong while processing your answer. Please try again.'
+    );
   }
 });
 
@@ -927,7 +1420,7 @@ bot.on('text', async (ctx) => {
 async function bootstrap(): Promise<void> {
   await connectToDatabase();
   await bot.launch();
-  console.log('🤖 FocusMind bot is up and running');
+  console.log('🤖 Focus Mind bot is up and running');
 }
 
 // Graceful shutdown handling
@@ -943,5 +1436,3 @@ process.once('SIGTERM', () => {
 
 // Start application
 void bootstrap();
-
-
