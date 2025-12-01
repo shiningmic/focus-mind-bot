@@ -1,11 +1,18 @@
 import cron from 'node-cron';
 import type { Telegraf } from 'telegraf';
 
+import type { Types } from 'mongoose';
+
 import { UserModel, type SlotConfig } from '../models/user.model.js';
 import { SessionModel } from '../models/session.model.js';
 import { getOrCreateSessionForUserSlotDate } from '../services/session.service.js';
 
 let isSchedulerRunning = false;
+const slotOrder: Record<'MORNING' | 'DAY' | 'EVENING', number> = {
+  MORNING: 0,
+  DAY: 1,
+  EVENING: 2,
+};
 
 // Helper: get user's local time and dateKey in their timezone
 function getUserLocalTime(timezone: string): {
@@ -76,6 +83,43 @@ function getSlotLabel(slot: 'MORNING' | 'DAY' | 'EVENING'): string {
   }
 }
 
+async function expireOldSessionsForUser(
+  userId: Types.ObjectId,
+  todayKey: string
+): Promise<void> {
+  await SessionModel.updateMany(
+    {
+      userId,
+      status: { $in: ['pending', 'in_progress'] },
+      dateKey: { $lt: todayKey },
+    },
+    { status: 'expired' }
+  ).exec();
+}
+
+async function skipEarlierSlotsToday(
+  userId: Types.ObjectId,
+  dateKey: string,
+  currentSlot: 'MORNING' | 'DAY' | 'EVENING'
+): Promise<void> {
+  const currentOrder = slotOrder[currentSlot];
+  const earlierSlots = Object.entries(slotOrder)
+    .filter(([, order]) => order < currentOrder)
+    .map(([code]) => code);
+
+  if (!earlierSlots.length) return;
+
+  await SessionModel.updateMany(
+    {
+      userId,
+      dateKey,
+      slot: { $in: earlierSlots },
+      status: { $in: ['pending', 'in_progress'] },
+    },
+    { status: 'skipped' }
+  ).exec();
+}
+
 /**
  * Start cron scheduler (every minute).
  */
@@ -87,7 +131,7 @@ export function startSlotScheduler(bot: Telegraf): void {
 
   cron.schedule('* * * * *', async () => {
     const tickIso = new Date().toISOString();
-    console.log(`⏱ Cron tick at ${tickIso}`);
+    console.log(`⏰ Cron tick at ${tickIso}`);
 
     try {
       const users = await UserModel.find({})
@@ -96,7 +140,7 @@ export function startSlotScheduler(bot: Telegraf): void {
         .exec();
 
       if (users.length === 0) {
-        console.log('⏱ Cron: no users found, skipping.');
+        console.log('ℹ️ Cron: no users found, skipping.');
         return;
       }
 
@@ -116,8 +160,11 @@ export function startSlotScheduler(bot: Telegraf): void {
 
         const { dateKey, minutesSinceMidnight } = localTime;
 
+        // Expire stale sessions from previous days
+        await expireOldSessionsForUser(user._id, dateKey);
+
         console.log(
-          `👤 User ${user._id} | tz=${timezone} | dateKey=${dateKey} | minutes=${minutesSinceMidnight}`
+          `📅 User ${user._id} | tz=${timezone} | dateKey=${dateKey} | minutes=${minutesSinceMidnight}`
         );
 
         for (const slotConfig of user.slots) {
@@ -128,7 +175,7 @@ export function startSlotScheduler(bot: Telegraf): void {
           const slot = slotConfig.slot;
 
           console.log(
-            `  ✅ Slot ${slot} is due now for user ${user._id} at minutes=${minutesSinceMidnight}`
+            `  ⏱️ Slot ${slot} is due now for user ${user._id} at minutes=${minutesSinceMidnight}`
           );
 
           // Check if there is already an in_progress/completed session for this day+slot
@@ -141,10 +188,13 @@ export function startSlotScheduler(bot: Telegraf): void {
 
           if (alreadyExists) {
             console.log(
-              `  ⚪ Session already in progress/completed for ${slot} on ${dateKey}, skipping`
+              `  ℹ️ Session already in progress/completed for ${slot} on ${dateKey}, skipping`
             );
             continue;
           }
+
+          // Skip earlier pending slots for today to keep only current slot active
+          await skipEarlierSlotsToday(user._id, dateKey, slot);
 
           // Build or load session
           const session = await getOrCreateSessionForUserSlotDate(
@@ -154,17 +204,24 @@ export function startSlotScheduler(bot: Telegraf): void {
           );
 
           console.log(
-            `  📝 Session ${session._id} created/loaded with ${session.questions.length} questions`
+            `  🗒️ Session ${session._id} created/loaded with ${session.questions.length} questions`
           );
 
           if (!session.questions.length) {
-            console.log('  ⚪ No questions in session, skipping send');
+            console.log('  ⚠️ No questions in session, skipping send');
+            continue;
+          }
+
+          if (session.status === 'skipped' || session.status === 'expired') {
+            console.log(
+              `  ⚠️ Session is ${session.status}, not sending question`
+            );
             continue;
           }
 
           const currentIndex = session.currentQuestionIndex ?? 0;
           if (currentIndex >= session.questions.length) {
-            console.log('  ⚪ Session already finished');
+            console.log('  ℹ️ Session already finished');
             continue;
           }
 
@@ -183,12 +240,12 @@ export function startSlotScheduler(bot: Telegraf): void {
               : '';
 
           console.log(
-            `  ?? Sending first question to telegramId=${user.telegramId}`
+            `  📤 Sending first question to telegramId=${user.telegramId}`
           );
 
           await bot.telegram.sendMessage(
             user.telegramId,
-            `🧭 ${label}${progress}
+            `🧠 ${label}${progress}
 
 ${question.text}`
           );
@@ -200,7 +257,7 @@ ${question.text}`
         /Client must be connected/.test(error?.message || '')
       ) {
         console.warn(
-          '⚠️ MongoNotConnectedError inside scheduler tick — skipping this tick'
+          '⚠️ MongoNotConnectedError inside scheduler tick - skipping this tick'
         );
         return;
       }
@@ -210,5 +267,5 @@ ${question.text}`
   });
 
   isSchedulerRunning = true;
-  console.log('⏰ Slot scheduler started (cron: * * * * *)');
+  console.log('🚀 Slot scheduler started (cron: * * * * *)');
 }
