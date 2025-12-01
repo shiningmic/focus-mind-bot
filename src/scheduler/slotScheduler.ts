@@ -172,20 +172,25 @@ export function startSlotScheduler(bot: Telegraf): void {
 
           // Mark session as started
           session.status = 'in_progress';
-          if (!session.startedAt) {
-            session.startedAt = new Date();
-          }
+          session.startedAt ||= new Date();
+          session.lastInteractionAt = new Date();
           await session.save();
 
           const label = getSlotLabel(slot);
+          const progress =
+            session.questions.length > 1
+              ? ` (${currentIndex + 1}/${session.questions.length})`
+              : '';
 
           console.log(
-            `  ✉️ Sending first question to telegramId=${user.telegramId}`
+            `  ?? Sending first question to telegramId=${user.telegramId}`
           );
 
           await bot.telegram.sendMessage(
             user.telegramId,
-            `🧠 ${label}\n\n${question.text}`
+            `🧭 ${label}${progress}
+
+${question.text}`
           );
         }
       }
