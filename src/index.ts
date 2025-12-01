@@ -1,10 +1,10 @@
-// src/index.ts
 import 'dotenv/config';
 import { Telegraf } from 'telegraf';
 import mongoose from 'mongoose';
 
 import { UserModel, type SlotConfig } from './models/user.model.js';
-import { SlotCode } from './types/core.js';
+import type { SlotCode } from './types/core.js';
+import { startSlotScheduler } from './scheduler/slotScheduler.js';
 import { getOrCreateSessionForUserSlotDate } from './services/session.service.js';
 import { ensureDefaultQuestionBlocksForUser } from './services/questionBlock.service.js';
 
@@ -29,18 +29,24 @@ const validatedMongoUri: string = mongoUri;
 // Default timezone for new users (will be configurable later)
 const DEFAULT_TIMEZONE = 'Europe/Kyiv';
 
-// Default slot configuration for a new user
+// Flag to ensure scheduler is started only once
+let schedulerStarted = false;
+
 // Default slot configuration for a new user
 function buildDefaultSlots(): SlotConfig[] {
+  const now = new Date();
+  const testMinutes = now.getHours() * 60 + ((now.getMinutes() + 2) % 60);
+
   return [
-    // MORNING — fixed at 09:00
+    // MORNING — fixed test time (now + 2 minutes) for development
     {
       slot: 'MORNING',
       mode: 'FIXED',
-      timeMinutes: 9 * 60, // 09:00
+      // timeMinutes: 9 * 60, // 09:00 in production
+      timeMinutes: testMinutes,
     },
 
-    // DAY — random between 13:00 and 15:00
+    // DAY — random between 13:00 and 15:00 (will be used later)
     {
       slot: 'DAY',
       mode: 'RANDOM_WINDOW',
@@ -112,9 +118,16 @@ bot.start(async (ctx) => {
     } else {
       await ctx.reply(
         `Welcome back, ${firstName}! 👋\n\n` +
-          `Your Focus Mind profile already exists.\n` +
+          `Your FocusMind profile already exists.\n` +
           `Soon I will start sending you reflection sessions based on your configured slots and questions.`
       );
+    }
+
+    // Start slot scheduler once, after the first successful /start
+    if (!schedulerStarted) {
+      schedulerStarted = true;
+      startSlotScheduler(bot);
+      console.log('🕒 Slot scheduler started after first /start');
     }
   } catch (error) {
     console.error('Error in /start handler:', error);
@@ -183,15 +196,13 @@ bot.command('debug_today_session', async (ctx) => {
 // Temporary fallback handler for any text message
 bot.on('text', async (ctx) => {
   await ctx.reply(
-    'I am running, but reflection sessions are not enabled yet.\nThey will be available soon 🙂'
+    'I am running, but reflection sessions are still in development.\nThey will be available soon 🙂'
   );
 });
 
 // Application bootstrap
 async function bootstrap(): Promise<void> {
   await connectToDatabase();
-
-  // Start the bot using long polling
   await bot.launch();
   console.log('🤖 FocusMind bot is up and running');
 }
