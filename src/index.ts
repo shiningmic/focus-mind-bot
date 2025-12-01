@@ -199,6 +199,33 @@ function formatMonthSchedule(
   return 'not set';
 }
 
+function parseSlotsFlag(raw: string): { morning: boolean; day: boolean; evening: boolean } | null {
+  const values = raw
+    .split(',')
+    .map((v) => v.trim().toLowerCase())
+    .filter(Boolean);
+
+  if (!values.length) return null;
+
+  const flags = { morning: false, day: false, evening: false };
+  for (const v of values) {
+    if (v === 'morning') flags.morning = true;
+    else if (v === 'day') flags.day = true;
+    else if (v === 'evening') flags.evening = true;
+  }
+
+  if (!flags.morning && !flags.day && !flags.evening) return null;
+  return flags;
+}
+
+function getPrimarySlotFromFlags(
+  slots: { morning: boolean; day: boolean; evening: boolean }
+): SlotCode {
+  if (slots.morning) return 'MORNING';
+  if (slots.day) return 'DAY';
+  return 'EVENING';
+}
+
 function getSlotLabel(slot: SlotCode): string {
   switch (slot) {
     case 'MORNING':
@@ -276,6 +303,35 @@ function pickNextSlotForReflection(
   return (upcoming ?? candidates[0]).slot;
 }
 
+async function expireOldSessions(
+  userId: mongoose.Types.ObjectId,
+  timezone: string
+): Promise<string> {
+  const todayKey = getDateKeyForTimezone(timezone || DEFAULT_TIMEZONE);
+  await SessionModel.updateMany(
+    {
+      userId,
+      status: { $in: ['pending', 'in_progress'] },
+      dateKey: { $lt: todayKey },
+    },
+    { status: 'expired' }
+  ).exec();
+  return todayKey;
+}
+
+async function getTodayActiveSessions(
+  userId: mongoose.Types.ObjectId,
+  dateKey: string
+): Promise<SessionDocument[]> {
+  return SessionModel.find({
+    userId,
+    dateKey,
+    status: { $in: ['pending', 'in_progress'] },
+  })
+    .sort({ createdAt: 1 })
+    .exec();
+}
+
 function formatSessionExportText(sessions: SessionDocument[]): string {
   if (!sessions.length) return 'No answers found.';
 
@@ -331,17 +387,6 @@ function buildSessionCompletionSummary(session: SessionDocument): string {
   });
 
   return lines.join('\n');
-}
-
-async function findLatestActiveSession(
-  userId: mongoose.Types.ObjectId
-): Promise<SessionDocument | null> {
-  return SessionModel.findOne({
-    userId,
-    status: { $in: ['pending', 'in_progress'] },
-  })
-    .sort({ updatedAt: -1, createdAt: -1 })
-    .exec();
 }
 
 async function replyWithSessionProgress(
@@ -521,7 +566,7 @@ bot.command('help', async (ctx) => {
     '/slots <M> <D> <E> - Configure daily slots (HH:MM or HH:MM-HH:MM)',
     '/daily /weekly /monthly - Configure question sets quickly',
     "/today - Show today's reflection sessions status",
-    '/reflect - Start or resume a reflection session',
+    '/reflect [skip] - Start or resume a reflection session (use "skip" to jump to the latest slot today)',
     '/export [json|text] - Export your answers',
     '/history - Recent reflection history',
     '/reset - Reset all Focus Mind data (with confirmation)',
@@ -650,6 +695,11 @@ bot.command('session_start', async (ctx) => {
 
 bot.command('reflect', async (ctx) => {
   try {
+    const [, argRaw] = (ctx.message?.text ?? '').trim().split(/\s+/, 2);
+    const skipPrevious =
+      (argRaw ?? '').toLowerCase() === 'skip' ||
+      (argRaw ?? '').toLowerCase() === 'current';
+
     const from = ctx.from;
     if (!from) {
       await ctx.reply(
@@ -666,10 +716,26 @@ bot.command('reflect', async (ctx) => {
       return;
     }
 
-    let session = await findLatestActiveSession(user._id);
+    const timezone = user.timezone || DEFAULT_TIMEZONE;
+    const todayKey = await expireOldSessions(user._id, timezone);
+    const todaySessions = await getTodayActiveSessions(user._id, todayKey);
+
+    let session: SessionDocument | null = null;
+
+    if (todaySessions.length) {
+      if (skipPrevious && todaySessions.length > 1) {
+        const toSkipIds = todaySessions.slice(0, -1).map((s) => s._id);
+        await SessionModel.updateMany(
+          { _id: { $in: toSkipIds } },
+          { status: 'skipped' }
+        ).exec();
+        session = todaySessions[todaySessions.length - 1];
+      } else {
+        session = todaySessions[0];
+      }
+    }
 
     if (!session) {
-      const timezone = user.timezone || DEFAULT_TIMEZONE;
       const nowMinutes = getTimezoneMinutesNow(timezone);
       const slot = pickNextSlotForReflection(user.slots, nowMinutes);
 
@@ -807,11 +873,11 @@ bot.command('questions_set', async (ctx) => {
 
   if (tokens.length < 2) {
     await ctx.reply(
-      'Usage: /questions_set TYPE SLOT Question1 | Question2 | Question3 [--days=1,5] [--month=first|last|day:15] [--name=CustomName]\n' +
+      'Usage: /questions_set TYPE SLOT Question1 | Question2 | Question3 [--days=1,5] [--month=first|last|day:15] [--slots=morning,day] [--name=CustomName]\n' +
         'Examples:\n' +
         '- /questions_set DAILY MORNING What is your focus? | How do you feel?\n' +
-        '- /questions_set WEEKLY EVENING Weekly review? | Main challenge? --days=5\n' +
-        '- /questions_set MONTHLY MORNING Plan month? | Key habits? --month=first'
+        '- /questions_set WEEKLY EVENING Weekly review? | Main challenge? --days=5 --slots=evening\n' +
+        '- /questions_set MONTHLY MORNING Plan month? | Key habits? --month=first --slots=morning,evening'
     );
     return;
   }
@@ -853,6 +919,7 @@ bot.command('questions_set', async (ctx) => {
     | { kind: 'DAY_OF_MONTH' | 'FIRST_DAY' | 'LAST_DAY'; dayOfMonth?: number }
     | undefined;
   let nameOverride: string | undefined;
+  let slotsOverride: { morning: boolean; day: boolean; evening: boolean } | undefined;
 
   for (const flag of flags) {
     if (flag.startsWith('days=')) {
@@ -887,6 +954,15 @@ bot.command('questions_set', async (ctx) => {
         );
         return;
       }
+    } else if (flag.startsWith('slots=')) {
+      const parsed = parseSlotsFlag(flag.slice('slots='.length));
+      if (!parsed) {
+        await ctx.reply(
+          'slots flag must contain morning, day, evening separated by commas. Example: --slots=morning,evening'
+        );
+        return;
+      }
+      slotsOverride = parsed;
     } else if (flag.startsWith('name=')) {
       nameOverride = flag.slice('name='.length).trim();
     }
@@ -911,12 +987,26 @@ bot.command('questions_set', async (ctx) => {
     day: slot === 'DAY',
     evening: slot === 'EVENING',
   };
+  const effectiveSlots = slotsOverride ?? slotFlags;
+
+  if (!effectiveSlots.morning && !effectiveSlots.day && !effectiveSlots.evening) {
+    await ctx.reply(
+      'At least one slot must be selected. Use SLOT argument or --slots flag.'
+    );
+    return;
+  }
 
   // Try to find existing block for this user/type/slot
+  const slotQueryKeys = ['morning', 'day', 'evening'].filter(
+    (key) => (effectiveSlots as Record<string, boolean>)[key]
+  );
+
   const existing = await QuestionBlockModel.findOne({
     userId: user._id,
     type,
-    [`slots.${slot.toLowerCase()}`]: true,
+    ...(slotQueryKeys.length
+      ? { $or: slotQueryKeys.map((key) => ({ [`slots.${key}`]: true })) }
+      : { [`slots.${slot.toLowerCase()}`]: true }),
   }).exec();
 
   const blockName =
@@ -924,7 +1014,7 @@ bot.command('questions_set', async (ctx) => {
     existing?.name ||
     `${
       type === 'DAILY' ? 'Daily' : type === 'WEEKLY' ? 'Weekly' : 'Monthly'
-    } ${slot.toLowerCase()}`;
+    } ${getPrimarySlotFromFlags(effectiveSlots).toLowerCase()}`;
 
   const baseQuestions = questions.map((text, index) => ({
     key: `q${index + 1}`,
@@ -934,7 +1024,7 @@ bot.command('questions_set', async (ctx) => {
 
   if (existing) {
     existing.name = blockName;
-    existing.slots = slotFlags;
+    existing.slots = effectiveSlots;
     existing.questions = baseQuestions;
 
     if (type === 'WEEKLY') {
@@ -956,7 +1046,7 @@ bot.command('questions_set', async (ctx) => {
       userId: user._id,
       type,
       name: blockName,
-      slots: slotFlags,
+      slots: effectiveSlots,
       questions: baseQuestions,
       daysOfWeek: type === 'WEEKLY' ? daysOfWeek ?? [1] : undefined,
       monthSchedule:
@@ -993,22 +1083,95 @@ bot.command('questions_set', async (ctx) => {
 bot.command(['daily', 'weekly', 'monthly'], async (ctx) => {
   const command =
     ctx.message?.text?.split(/\s+/)[0]?.replace('/', '') ?? 'daily';
-  const type = command.toUpperCase();
+  const type = command.toUpperCase() as QuestionType;
+  const from = ctx.from;
 
-  const examples: Record<string, string> = {
-    DAILY:
-      '/questions_set DAILY MORNING What is your focus? | How do you feel?',
-    WEEKLY:
-      '/questions_set WEEKLY EVENING Weekly review? | Main challenge? --days=5',
-    MONTHLY:
-      '/questions_set MONTHLY MORNING Plan month? | Key habits? --month=last',
+  if (!from) {
+    await ctx.reply('Unable to read your Telegram profile. Please try again.');
+    return;
+  }
+
+  const user = await UserModel.findOne({ telegramId: from.id }).exec();
+  if (!user) {
+    await ctx.reply('You do not have a FocusMind profile yet. Send /start first.');
+    return;
+  }
+
+  const blocks = await QuestionBlockModel.find({ userId: user._id, type })
+    .sort({ createdAt: 1 })
+    .exec();
+
+  if (!blocks.length) {
+    const templates: Record<QuestionType, string> = {
+      DAILY: '/questions_set DAILY MORNING What is your focus? | How do you feel?',
+      WEEKLY: '/questions_set WEEKLY EVENING Weekly review? | Main challenge? --days=5',
+      MONTHLY: '/questions_set MONTHLY MORNING Plan month? | Key habits? --month=last',
+    };
+
+    await ctx.reply(
+      `No ${type.toLowerCase()} question sets yet.\nCreate one:\n${templates[type]}`
+    );
+    return;
+  }
+
+  const lines: string[] = [];
+  lines.push(`Your ${type.toLowerCase()} question sets:`);
+
+  const pickPrimarySlot = (
+    slots: { morning: boolean; day: boolean; evening: boolean }
+  ): SlotCode => {
+    if (slots.morning) return 'MORNING';
+    if (slots.day) return 'DAY';
+    return 'EVENING';
   };
 
-  await ctx.reply(
-    `${type} questions setup:\n` +
-      'Use /questions_set TYPE SLOT Question1 | Question2 ...\n' +
-      `Example: ${examples[type] ?? examples.DAILY}`
-  );
+  for (const block of blocks) {
+    lines.push('');
+    lines.push(`[${block.name}]`);
+    lines.push(`Slots: ${formatSlotsForBlock(block.slots)}`);
+
+    if (type === 'WEEKLY') {
+      lines.push(`Days: ${formatWeekdays(block.daysOfWeek)}`);
+    }
+
+    if (type === 'MONTHLY') {
+      lines.push(`Month schedule: ${formatMonthSchedule(block.monthSchedule)}`);
+    }
+
+    const questions = [...block.questions].sort((a, b) => a.order - b.order);
+    if (questions.length) {
+      lines.push('Questions:');
+      questions.forEach((q, idx) => lines.push(`${idx + 1}. ${q.text}`));
+    } else {
+      lines.push('Questions: none yet');
+    }
+
+    const slotForUpdate = pickPrimarySlot(block.slots);
+    const slotsFlag = ['morning', 'day', 'evening']
+      .filter((k) => (block.slots as Record<string, boolean>)[k])
+      .join(',');
+
+    const extraFlags: string[] = [];
+    if (slotsFlag) extraFlags.push(`--slots=${slotsFlag}`);
+    if (type === 'WEEKLY' && block.daysOfWeek?.length) {
+      extraFlags.push(`--days=${block.daysOfWeek.join(',')}`);
+    }
+    if (type === 'MONTHLY' && block.monthSchedule) {
+      const ms = block.monthSchedule;
+      if (ms.kind === 'FIRST_DAY') extraFlags.push('--month=first');
+      else if (ms.kind === 'LAST_DAY') extraFlags.push('--month=last');
+      else if (ms.kind === 'DAY_OF_MONTH' && ms.dayOfMonth) {
+        extraFlags.push(`--month=day:${ms.dayOfMonth}`);
+      }
+    }
+
+    const flagsStr = extraFlags.length ? ' ' + extraFlags.join(' ') : '';
+    lines.push(
+      `Change this set: /questions_set ${type} ${slotForUpdate} Question1 | Question2 | Question3${flagsStr}`
+    );
+  }
+
+  await ctx.reply(lines.join('\n'));
 });
 
 // Command to show current settings: timezone and slot timings
@@ -1338,7 +1501,17 @@ bot.on('text', async (ctx) => {
       return;
     }
 
-    const session = await findLatestActiveSession(user._id);
+    const timezone = user.timezone || DEFAULT_TIMEZONE;
+    const todayKey = await expireOldSessions(user._id, timezone);
+
+    const session = await SessionModel.findOne({
+      userId: user._id,
+      dateKey: todayKey,
+      status: { $in: ['pending', 'in_progress'] },
+    })
+      .sort({ updatedAt: -1, createdAt: -1 })
+      .exec();
+
     if (!session || !session.questions.length) {
       await ctx.reply(
         'No active reflection session right now. Use /session_start SLOT to begin one.'
