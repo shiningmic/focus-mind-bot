@@ -9,7 +9,12 @@ import {
 } from './models/user.model.js';
 import { QuestionBlockModel } from './models/questionBlock.model.js';
 import { SessionModel, type SessionDocument } from './models/session.model.js';
-import type { SlotCode, SlotMode, QuestionType } from './types/core.js';
+import type {
+  SlotCode,
+  SlotMode,
+  QuestionType,
+  MonthSchedule,
+} from './types/core.js';
 import { startSlotScheduler } from './scheduler/slotScheduler.js';
 import { getOrCreateSessionForUserSlotDate } from './services/session.service.js';
 import { ensureDefaultQuestionBlocksForUser } from './services/questionBlock.service.js';
@@ -50,6 +55,77 @@ const pendingActions = new Map<
       q2?: string;
       q3?: string;
     }
+  | {
+      type: 'createDaily';
+      step: 'name' | 'slot' | 'q1' | 'q2' | 'q3';
+      temp: {
+        name?: string;
+        slot?: SlotCode;
+        q1?: string;
+        q2?: string;
+        q3?: string;
+      };
+    }
+  | {
+      type: 'editWeekly';
+      step:
+        | 'menu'
+        | 'setSlots'
+        | 'setDays'
+        | 'setName'
+        | 'setQ1'
+        | 'setQ2'
+        | 'setQ3';
+      blockId: string;
+      blockName: string;
+      slots?: { morning: boolean; day: boolean; evening: boolean };
+      days?: number[];
+      q1?: string;
+      q2?: string;
+      q3?: string;
+    }
+  | {
+      type: 'createWeekly';
+      step: 'name' | 'slots' | 'days' | 'q1' | 'q2' | 'q3';
+      temp: {
+        name?: string;
+        slots?: { morning: boolean; day: boolean; evening: boolean };
+        days?: number[];
+        q1?: string;
+        q2?: string;
+        q3?: string;
+      };
+    }
+  | {
+      type: 'editMonthly';
+      step:
+        | 'menu'
+        | 'setSlots'
+        | 'setSchedule'
+        | 'setName'
+        | 'setQ1'
+        | 'setQ2'
+        | 'setQ3';
+      blockId: string;
+      blockName: string;
+      slots?: { morning: boolean; day: boolean; evening: boolean };
+      schedule?: MonthSchedule;
+      q1?: string;
+      q2?: string;
+      q3?: string;
+    }
+  | {
+      type: 'createMonthly';
+      step: 'name' | 'slots' | 'schedule' | 'q1' | 'q2' | 'q3';
+      temp: {
+        name?: string;
+        slots?: { morning: boolean; day: boolean; evening: boolean };
+        schedule?: MonthSchedule;
+        q1?: string;
+        q2?: string;
+        q3?: string;
+      };
+    }
 >();
 
 const QUICK_ACTION_LABELS = {
@@ -65,12 +141,16 @@ const SETTINGS_BUTTON_LABELS = {
   weekly: '📅 Weekly',
   monthly: '🗓️ Monthly',
 } as const;
+const ADD_DAILY_BUTTON = '➕ Add daily set';
+const ADD_WEEKLY_BUTTON = '➕ Add weekly set';
+const ADD_MONTHLY_BUTTON = '➕ Add monthly set';
 const DAILY_EDIT_ACTION_BUTTONS = {
   slot: '🕒 Change slot',
   name: '✏️ Rename set',
   q1: '❓ Edit question 1',
   q2: '❓ Edit question 2',
   q3: '❓ Edit question 3',
+  delete: '🗑️ Delete set',
   cancel: '❌ Cancel edit',
 } as const;
 
@@ -101,10 +181,11 @@ function buildDailyKeyboard(
   blocks?: Array<{ name: string }>
 ): ReturnType<typeof Markup.keyboard> {
   if (!blocks || blocks.length === 0) {
-    return Markup.keyboard([[SETTINGS_BUTTON_LABELS.daily]]).resize();
+    return Markup.keyboard([[ADD_DAILY_BUTTON]]).resize();
   }
   const labels = blocks.map((b) => `✏️ ${b.name}`);
   const rows = chunkButtons(labels, 2);
+  if (blocks.length < 3) rows.push([ADD_DAILY_BUTTON]);
   return Markup.keyboard(rows).resize();
 }
 
@@ -112,7 +193,72 @@ function buildDailyEditKeyboard() {
   return Markup.keyboard([
     [DAILY_EDIT_ACTION_BUTTONS.slot, DAILY_EDIT_ACTION_BUTTONS.name],
     [DAILY_EDIT_ACTION_BUTTONS.q1, DAILY_EDIT_ACTION_BUTTONS.q2],
-    [DAILY_EDIT_ACTION_BUTTONS.q3, DAILY_EDIT_ACTION_BUTTONS.cancel],
+    [DAILY_EDIT_ACTION_BUTTONS.q3, DAILY_EDIT_ACTION_BUTTONS.delete],
+    [DAILY_EDIT_ACTION_BUTTONS.cancel],
+  ]).resize();
+}
+
+function buildWeeklyKeyboard(
+  blocks?: Array<{ name: string }>
+): ReturnType<typeof Markup.keyboard> {
+  if (!blocks || blocks.length === 0) {
+    return Markup.keyboard([[ADD_WEEKLY_BUTTON]]).resize();
+  }
+  const labels = blocks.map((b) => `✏️ ${b.name}`);
+  const rows = chunkButtons(labels, 2);
+  if (blocks.length < 3) rows.push([ADD_WEEKLY_BUTTON]);
+  return Markup.keyboard(rows).resize();
+}
+
+const WEEKLY_EDIT_ACTION_BUTTONS = {
+  slots: '🕒 Change slots',
+  days: '📅 Change days',
+  name: '✏️ Rename set',
+  q1: '❓ Edit question 1',
+  q2: '❓ Edit question 2',
+  q3: '❓ Edit question 3',
+  cancel: '❌ Cancel edit',
+  delete: '🗑️ Delete set',
+} as const;
+
+function buildWeeklyEditKeyboard() {
+  return Markup.keyboard([
+    [WEEKLY_EDIT_ACTION_BUTTONS.slots, WEEKLY_EDIT_ACTION_BUTTONS.days],
+    [WEEKLY_EDIT_ACTION_BUTTONS.name, WEEKLY_EDIT_ACTION_BUTTONS.q1],
+    [WEEKLY_EDIT_ACTION_BUTTONS.q2, WEEKLY_EDIT_ACTION_BUTTONS.q3],
+    [WEEKLY_EDIT_ACTION_BUTTONS.delete, WEEKLY_EDIT_ACTION_BUTTONS.cancel],
+  ]).resize();
+}
+
+function buildMonthlyKeyboard(
+  blocks?: Array<{ name: string }>
+): ReturnType<typeof Markup.keyboard> {
+  if (!blocks || blocks.length === 0) {
+    return Markup.keyboard([[ADD_MONTHLY_BUTTON]]).resize();
+  }
+  const labels = blocks.map((b) => `✏️ ${b.name}`);
+  const rows = chunkButtons(labels, 2);
+  if (blocks.length < 3) rows.push([ADD_MONTHLY_BUTTON]);
+  return Markup.keyboard(rows).resize();
+}
+
+const MONTHLY_EDIT_ACTION_BUTTONS = {
+  slots: '🕒 Change slots',
+  schedule: '📆 Change schedule',
+  name: '✏️ Rename set',
+  q1: '❓ Edit question 1',
+  q2: '❓ Edit question 2',
+  q3: '❓ Edit question 3',
+  delete: '🗑️ Delete set',
+  cancel: '❌ Cancel edit',
+} as const;
+
+function buildMonthlyEditKeyboard() {
+  return Markup.keyboard([
+    [MONTHLY_EDIT_ACTION_BUTTONS.slots, MONTHLY_EDIT_ACTION_BUTTONS.schedule],
+    [MONTHLY_EDIT_ACTION_BUTTONS.name, MONTHLY_EDIT_ACTION_BUTTONS.q1],
+    [MONTHLY_EDIT_ACTION_BUTTONS.q2, MONTHLY_EDIT_ACTION_BUTTONS.q3],
+    [MONTHLY_EDIT_ACTION_BUTTONS.delete, MONTHLY_EDIT_ACTION_BUTTONS.cancel],
   ]).resize();
 }
 
@@ -539,6 +685,228 @@ async function startDailyEditFlow(
   );
 }
 
+async function startWeeklyEditFlow(
+  ctx: Context,
+  blockName: string
+): Promise<void> {
+  const from = ctx.from;
+  if (!from) {
+    await ctx.reply('Unable to read your Telegram profile. Please try again.');
+    return;
+  }
+
+  const user = await UserModel.findOne({ telegramId: from.id }).exec();
+  if (!user) {
+    await ctx.reply('You do not have a Focus Mind profile yet. Send /start first.');
+    return;
+  }
+
+  const order: Array<'morning' | 'day' | 'evening'> = ['morning', 'day', 'evening'];
+  const weeklyBlocks = await QuestionBlockModel.find({
+    userId: user._id,
+    type: 'WEEKLY',
+  })
+    .sort({ createdAt: 1 })
+    .lean()
+    .exec();
+
+  const sorted = [...weeklyBlocks].sort((a, b) => {
+    const aIdxRaw = order.findIndex((s) => (a.slots as any)[s]);
+    const bIdxRaw = order.findIndex((s) => (b.slots as any)[s]);
+    const aIdx = aIdxRaw === -1 ? order.length : aIdxRaw;
+    const bIdx = bIdxRaw === -1 ? order.length : bIdxRaw;
+    return aIdx - bIdx;
+  });
+
+  const targetName = blockName.replace(/^✏️\s*/, '').trim().toLowerCase();
+  const block = sorted.find(
+    (b) => b.name.trim().toLowerCase() === targetName
+  );
+
+  if (!block) {
+    await ctx.reply('This weekly set does not exist. Try another.');
+    return;
+  }
+
+  pendingActions.set(from.id, {
+    type: 'editWeekly',
+    step: 'menu',
+    blockId: block._id.toString(),
+    blockName: block.name,
+  });
+
+  await ctx.reply(
+    `Editing weekly set "${block.name}".\nUse buttons to change slots, days, name, or questions.`,
+    buildWeeklyEditKeyboard()
+  );
+}
+
+async function startWeeklyCreateFlow(ctx: Context): Promise<void> {
+  const from = ctx.from;
+  if (!from) {
+    await ctx.reply('Unable to read your Telegram profile. Please try again.');
+    return;
+  }
+
+  const user = await UserModel.findOne({ telegramId: from.id }).exec();
+  if (!user) {
+    await ctx.reply('You do not have a Focus Mind profile yet. Send /start first.');
+    return;
+  }
+
+  const count = await QuestionBlockModel.countDocuments({
+    userId: user._id,
+    type: 'WEEKLY',
+  }).exec();
+
+  if (count >= 3) {
+    await ctx.reply('You already have 3 weekly sets. Delete one to add another.', buildWeeklyKeyboard());
+    return;
+  }
+
+  pendingActions.set(from.id, {
+    type: 'createWeekly',
+    step: 'name',
+    temp: {},
+  });
+
+  await ctx.reply('Enter a name for the new weekly set:', buildWeeklyEditKeyboard());
+}
+
+function parseMonthScheduleInput(
+  raw: string
+): MonthSchedule | null {
+  const trimmed = raw.trim().toLowerCase();
+  if (trimmed === 'first') return { kind: 'FIRST_DAY' };
+  if (trimmed === 'last') return { kind: 'LAST_DAY' };
+  if (trimmed.startsWith('day:')) {
+    const num = Number.parseInt(trimmed.slice(4), 10);
+    if (!Number.isInteger(num) || num < 1 || num > 28) return null;
+    return { kind: 'DAY_OF_MONTH', dayOfMonth: num };
+  }
+  return null;
+}
+
+async function startMonthlyEditFlow(
+  ctx: Context,
+  blockName: string
+): Promise<void> {
+  const from = ctx.from;
+  if (!from) {
+    await ctx.reply('Unable to read your Telegram profile. Please try again.');
+    return;
+  }
+
+  const user = await UserModel.findOne({ telegramId: from.id }).exec();
+  if (!user) {
+    await ctx.reply('You do not have a Focus Mind profile yet. Send /start first.');
+    return;
+  }
+
+  const order: Array<'morning' | 'day' | 'evening'> = ['morning', 'day', 'evening'];
+  const monthlyBlocks = await QuestionBlockModel.find({
+    userId: user._id,
+    type: 'MONTHLY',
+  })
+    .sort({ createdAt: 1 })
+    .lean()
+    .exec();
+
+  const sorted = [...monthlyBlocks].sort((a, b) => {
+    const aIdxRaw = order.findIndex((s) => (a.slots as any)[s]);
+    const bIdxRaw = order.findIndex((s) => (b.slots as any)[s]);
+    const aIdx = aIdxRaw === -1 ? order.length : aIdxRaw;
+    const bIdx = bIdxRaw === -1 ? order.length : bIdxRaw;
+    return aIdx - bIdx;
+  });
+
+  const targetName = blockName.replace(/^✏️\s*/, '').trim().toLowerCase();
+  const block = sorted.find(
+    (b) => b.name.trim().toLowerCase() === targetName
+  );
+
+  if (!block) {
+    await ctx.reply('This monthly set does not exist. Try another.');
+    return;
+  }
+
+  pendingActions.set(from.id, {
+    type: 'editMonthly',
+    step: 'menu',
+    blockId: block._id.toString(),
+    blockName: block.name,
+  });
+
+  await ctx.reply(
+    `Editing monthly set "${block.name}".\nUse buttons to change slots, schedule, name, or questions.`,
+    buildMonthlyEditKeyboard()
+  );
+}
+
+async function startMonthlyCreateFlow(ctx: Context): Promise<void> {
+  const from = ctx.from;
+  if (!from) {
+    await ctx.reply('Unable to read your Telegram profile. Please try again.');
+    return;
+  }
+
+  const user = await UserModel.findOne({ telegramId: from.id }).exec();
+  if (!user) {
+    await ctx.reply('You do not have a Focus Mind profile yet. Send /start first.');
+    return;
+  }
+
+  const count = await QuestionBlockModel.countDocuments({
+    userId: user._id,
+    type: 'MONTHLY',
+  }).exec();
+
+  if (count >= 3) {
+    await ctx.reply('You already have 3 monthly sets. Delete one to add another.', buildMonthlyKeyboard());
+    return;
+  }
+
+  pendingActions.set(from.id, {
+    type: 'createMonthly',
+    step: 'name',
+    temp: {},
+  });
+
+  await ctx.reply('Enter a name for the new monthly set:', buildMonthlyEditKeyboard());
+}
+
+async function startDailyCreateFlow(ctx: Context): Promise<void> {
+  const from = ctx.from;
+  if (!from) {
+    await ctx.reply('Unable to read your Telegram profile. Please try again.');
+    return;
+  }
+
+  const user = await UserModel.findOne({ telegramId: from.id }).exec();
+  if (!user) {
+    await ctx.reply('You do not have a Focus Mind profile yet. Send /start first.');
+    return;
+  }
+
+  const count = await QuestionBlockModel.countDocuments({
+    userId: user._id,
+    type: 'DAILY',
+  }).exec();
+
+  if (count >= 3) {
+    await ctx.reply('You already have 3 daily sets. Delete one to add another.', buildDailyKeyboard());
+    return;
+  }
+
+  pendingActions.set(from.id, {
+    type: 'createDaily',
+    step: 'name',
+    temp: {},
+  });
+
+  await ctx.reply('Enter a name for the new daily set:', buildDailyEditKeyboard());
+}
+
 function isValidTimezone(timezone: string): boolean {
   try {
     new Intl.DateTimeFormat('en-US', { timeZone: timezone }).format(new Date());
@@ -770,20 +1138,15 @@ async function handleBlocksList(
     .exec();
 
   if (!blocks.length) {
-    const templates: Record<QuestionType, string> = {
-      DAILY:
-        '/questions_set DAILY MORNING What is your focus? | How do you feel?',
-      WEEKLY:
-        '/questions_set WEEKLY EVENING Weekly review? | Main challenge? --days=5',
-      MONTHLY:
-        '/questions_set MONTHLY MORNING Plan month? | Key habits? --month=last',
-    };
-
+    const keyboard =
+      type === 'DAILY'
+        ? buildDailyKeyboard([])
+        : type === 'WEEKLY'
+        ? buildWeeklyKeyboard([])
+        : buildMonthlyKeyboard([]);
     await ctx.reply(
-      `No ${type.toLowerCase()} question sets yet.\nCreate one:\n${
-        templates[type]
-      }`,
-      buildSettingsKeyboard()
+      `No ${type.toLowerCase()} question sets yet.\nUse the add button below to create one.`,
+      keyboard
     );
     return;
   }
@@ -845,7 +1208,13 @@ async function handleBlocksList(
   }
 
   const keyboard =
-    type === 'DAILY' ? buildDailyKeyboard(blocks) : buildSettingsKeyboard();
+    type === 'DAILY'
+      ? buildDailyKeyboard(blocks)
+      : type === 'WEEKLY'
+      ? buildWeeklyKeyboard(blocks)
+      : type === 'MONTHLY'
+      ? buildMonthlyKeyboard(blocks)
+      : buildSettingsKeyboard();
   await ctx.reply(lines.join('\n'), keyboard);
 }
 
@@ -1557,10 +1926,20 @@ bot.command('settings', async (ctx) => {
     (user.slots ?? []).map((s) => [s.slot, s])
   );
 
+  const morningSummary = slotMap.get('MORNING')
+    ? formatSlotSummary(slotMap.get('MORNING')!)
+    : 'Morning: not configured';
+  const daySummary = slotMap.get('DAY')
+    ? formatSlotSummary(slotMap.get('DAY')!)
+    : 'Day: not configured';
+  const eveningSummary = slotMap.get('EVENING')
+    ? formatSlotSummary(slotMap.get('EVENING')!)
+    : 'Evening: not configured';
+
   lines.push(
-    `- Morning: ${formatSlotSummary(slotMap.get('MORNING')!)}`,
-    `- Day: ${formatSlotSummary(slotMap.get('DAY')!)}`,
-    `- Evening: ${formatSlotSummary(slotMap.get('EVENING')!)}`,
+    `- ${morningSummary}`,
+    `- ${daySummary}`,
+    `- ${eveningSummary}`,
     `- Timezone: ${user.timezone}`,
     '',
     'Configured question blocks:'
@@ -1967,13 +2346,795 @@ bot.on('text', async (ctx) => {
 
     const messageText = (ctx.message?.text ?? '').trim();
 
-    if (messageText === HELP_BUTTON_LABEL) {
-      await sendHelp(ctx);
+  if (messageText === HELP_BUTTON_LABEL) {
+    await sendHelp(ctx);
+    return;
+  }
+
+    if (messageText === ADD_MONTHLY_BUTTON) {
+      await startMonthlyCreateFlow(ctx);
+      return;
+    }
+    if (messageText === ADD_DAILY_BUTTON) {
+      await startDailyCreateFlow(ctx);
+      return;
+    }
+    // Weekly creation start
+    if (messageText === ADD_WEEKLY_BUTTON) {
+      await startWeeklyCreateFlow(ctx);
       return;
     }
 
     const pendingAction = pendingActions.get(from.id);
+    if (pendingAction?.type === 'editWeekly') {
+      if (messageText === WEEKLY_EDIT_ACTION_BUTTONS.cancel) {
+        pendingActions.delete(from.id);
+        await handleBlocksList(ctx, 'WEEKLY');
+        return;
+      }
+      if (messageText === WEEKLY_EDIT_ACTION_BUTTONS.delete) {
+        const block = await QuestionBlockModel.findOneAndDelete({
+          _id: pendingAction.blockId,
+          userId: user._id,
+          type: 'WEEKLY',
+        }).exec();
+        pendingActions.delete(from.id);
+        if (!block) {
+          await ctx.reply('Weekly set not found anymore.', buildWeeklyKeyboard());
+          return;
+        }
+        await ctx.reply(
+          `Weekly set "${block.name}" deleted.`,
+          buildWeeklyKeyboard()
+        );
+        await handleBlocksList(ctx, 'WEEKLY');
+        return;
+      }
+
+      const loadBlock = async () => {
+        const block = await QuestionBlockModel.findOne({
+          _id: pendingAction.blockId,
+          userId: user._id,
+          type: 'WEEKLY',
+        }).exec();
+        return block;
+      };
+
+      if (pendingAction.step === 'menu') {
+        if (messageText === WEEKLY_EDIT_ACTION_BUTTONS.slots) {
+          pendingAction.step = 'setSlots';
+          pendingActions.set(from.id, pendingAction);
+          await ctx.reply(
+            'Enter slots separated by comma: morning, day, evening.',
+            buildWeeklyEditKeyboard()
+          );
+          return;
+        }
+        if (messageText === WEEKLY_EDIT_ACTION_BUTTONS.days) {
+          pendingAction.step = 'setDays';
+          pendingActions.set(from.id, pendingAction);
+          await ctx.reply(
+            'Enter days of week as numbers 1-7 separated by comma (Mon=1 ... Sun=7).',
+            buildWeeklyEditKeyboard()
+          );
+          return;
+        }
+        if (messageText === WEEKLY_EDIT_ACTION_BUTTONS.name) {
+          pendingAction.step = 'setName';
+          pendingActions.set(from.id, pendingAction);
+          await ctx.reply('Enter new name for this weekly set:', buildWeeklyEditKeyboard());
+          return;
+        }
+        if (messageText === WEEKLY_EDIT_ACTION_BUTTONS.q1) {
+          pendingAction.step = 'setQ1';
+          pendingActions.set(from.id, pendingAction);
+          await ctx.reply('Enter question 1:', buildWeeklyEditKeyboard());
+          return;
+        }
+        if (messageText === WEEKLY_EDIT_ACTION_BUTTONS.q2) {
+          pendingAction.step = 'setQ2';
+          pendingActions.set(from.id, pendingAction);
+          await ctx.reply('Enter question 2:', buildWeeklyEditKeyboard());
+          return;
+        }
+        if (messageText === WEEKLY_EDIT_ACTION_BUTTONS.q3) {
+          pendingAction.step = 'setQ3';
+          pendingActions.set(from.id, pendingAction);
+          await ctx.reply('Enter question 3:', buildWeeklyEditKeyboard());
+          return;
+        }
+
+        await ctx.reply(
+          'Choose what to change using the buttons.',
+          buildWeeklyEditKeyboard()
+        );
+        return;
+      }
+
+      const block = await loadBlock();
+      if (!block) {
+        pendingActions.delete(from.id);
+        await ctx.reply('Weekly set not found anymore.', buildWeeklyKeyboard());
+        return;
+      }
+
+      const finishAndShow = async (extraLines: string[]) => {
+        pendingActions.delete(from.id);
+        await ctx.reply(extraLines.join('\n'), buildWeeklyKeyboard([block]));
+        await handleBlocksList(ctx, 'WEEKLY');
+      };
+
+      if (pendingAction.step === 'setSlots') {
+        const parsed = parseSlotsFlag(messageText);
+        if (!parsed) {
+          await ctx.reply(
+            'Slots flag must contain morning, day, evening separated by commas. Example: morning,evening',
+            buildWeeklyEditKeyboard()
+          );
+          return;
+        }
+        block.slots = parsed;
+        await block.save();
+        const slotNames = formatSlotsForBlock(block.slots);
+        await finishAndShow([
+          `Saved weekly set "${block.name}".`,
+          `Slots: ${slotNames}`,
+        ]);
+        return;
+      }
+
+      if (pendingAction.step === 'setDays') {
+        const parsed = messageText
+          .split(',')
+          .map((d) => Number.parseInt(d.trim(), 10))
+          .filter((n) => Number.isInteger(n) && n >= 1 && n <= 7);
+        if (!parsed.length) {
+          await ctx.reply(
+            'Please provide days as numbers 1-7 separated by commas, e.g. 1,5 for Mon & Fri.',
+            buildWeeklyEditKeyboard()
+          );
+          return;
+        }
+        block.daysOfWeek = parsed;
+        await block.save();
+        await finishAndShow([
+          `Saved weekly set "${block.name}".`,
+          `Days: ${formatWeekdays(parsed)}`,
+        ]);
+        return;
+      }
+
+      if (pendingAction.step === 'setName') {
+        const newName = messageText.trim();
+        if (!newName) {
+          await ctx.reply('Name cannot be empty.', buildWeeklyEditKeyboard());
+          return;
+        }
+        block.name = newName;
+        await block.save();
+        await finishAndShow([`Saved weekly set "${block.name}".`]);
+        return;
+      }
+
+      const questions = [...block.questions].sort((a, b) => a.order - b.order);
+
+      const updateQuestion = async (index: number, text: string) => {
+        const clean = text.trim();
+        if (!clean) {
+          await ctx.reply('Question cannot be empty.', buildWeeklyEditKeyboard());
+          return;
+        }
+        while (questions.length < index + 1) {
+          questions.push({
+            key: `q${questions.length + 1}`,
+            text: '',
+            order: questions.length,
+          });
+        }
+        questions[index] = {
+          ...questions[index],
+          key: `q${index + 1}`,
+          text: clean,
+          order: index,
+        };
+        block.questions = questions;
+        await block.save();
+        await finishAndShow([
+          `Saved weekly set "${block.name}".`,
+          'Questions:',
+          ...block.questions
+            .sort((a, b) => a.order - b.order)
+            .map((q, idx) => `${idx + 1}. ${q.text}`),
+        ]);
+      };
+
+      if (pendingAction.step === 'setQ1') {
+        await updateQuestion(0, messageText);
+        return;
+      }
+      if (pendingAction.step === 'setQ2') {
+        await updateQuestion(1, messageText);
+        return;
+      }
+      if (pendingAction.step === 'setQ3') {
+        await updateQuestion(2, messageText);
+        return;
+      }
+    }
+
+    if (pendingAction?.type === 'createWeekly') {
+      if (pendingAction.step === 'name') {
+        const name = messageText.trim();
+        if (!name) {
+          await ctx.reply('Name cannot be empty.', buildWeeklyEditKeyboard());
+          return;
+        }
+        pendingAction.temp.name = name;
+        pendingAction.step = 'slots';
+        pendingActions.set(from.id, pendingAction);
+        await ctx.reply(
+          'Enter slots separated by comma: morning, day, evening.',
+          buildWeeklyEditKeyboard()
+        );
+        return;
+      }
+
+      if (pendingAction.step === 'slots') {
+        const parsed = parseSlotsFlag(messageText);
+        if (!parsed) {
+          await ctx.reply(
+            'Slots must be comma separated: morning, day, evening (at least one).',
+            buildWeeklyEditKeyboard()
+          );
+          return;
+        }
+        pendingAction.temp.slots = parsed;
+        pendingAction.step = 'days';
+        pendingActions.set(from.id, pendingAction);
+        await ctx.reply(
+          'Enter days of week as numbers 1-7 separated by comma (Mon=1 ... Sun=7).',
+          buildWeeklyEditKeyboard()
+        );
+        return;
+      }
+
+      if (pendingAction.step === 'days') {
+        const parsed = messageText
+          .split(',')
+          .map((d) => Number.parseInt(d.trim(), 10))
+          .filter((n) => Number.isInteger(n) && n >= 1 && n <= 7);
+        if (!parsed.length) {
+          await ctx.reply(
+            'Please provide days as numbers 1-7 separated by commas, e.g. 1,5 for Mon & Fri.',
+            buildWeeklyEditKeyboard()
+          );
+          return;
+        }
+        pendingAction.temp.days = parsed;
+        pendingAction.step = 'q1';
+        pendingActions.set(from.id, pendingAction);
+        await ctx.reply('Enter question 1:', buildWeeklyEditKeyboard());
+        return;
+      }
+
+      const setQuestion = (idx: 1 | 2 | 3) => {
+        const clean = messageText.trim();
+        if (!clean) {
+          return false;
+        }
+        pendingAction.temp[`q${idx}` as 'q1'] = clean;
+        return true;
+      };
+
+      if (pendingAction.step === 'q1') {
+        if (!setQuestion(1)) {
+          await ctx.reply('Question cannot be empty.', buildWeeklyEditKeyboard());
+          return;
+        }
+        pendingAction.step = 'q2';
+        pendingActions.set(from.id, pendingAction);
+        await ctx.reply('Enter question 2 (or repeat/adjust):', buildWeeklyEditKeyboard());
+        return;
+      }
+
+      if (pendingAction.step === 'q2') {
+        if (!setQuestion(2)) {
+          await ctx.reply('Question cannot be empty.', buildWeeklyEditKeyboard());
+          return;
+        }
+        pendingAction.step = 'q3';
+        pendingActions.set(from.id, pendingAction);
+        await ctx.reply('Enter question 3 (or repeat/adjust):', buildWeeklyEditKeyboard());
+        return;
+      }
+
+      if (pendingAction.step === 'q3') {
+        setQuestion(3);
+
+        const { name, slots, days, q1, q2, q3 } = pendingAction.temp;
+        if (!name || !slots || !days?.length) {
+          pendingActions.delete(from.id);
+          await ctx.reply('Creation data incomplete. Start over with Add weekly.', buildWeeklyKeyboard());
+          return;
+        }
+
+        const questions = [q1, q2, q3]
+          .filter((q) => (q ?? '').trim().length > 0)
+          .map((q, idx) => ({
+            key: `q${idx + 1}`,
+            text: q!.trim(),
+            order: idx,
+          }));
+
+        if (!questions.length) {
+          pendingActions.delete(from.id);
+          await ctx.reply('Please provide at least one non-empty question. Start over.', buildWeeklyKeyboard());
+          return;
+        }
+
+        await QuestionBlockModel.create({
+          userId: user._id,
+          type: 'WEEKLY',
+          name,
+          slots,
+          daysOfWeek: days,
+          questions,
+        });
+
+        pendingActions.delete(from.id);
+        await ctx.reply(
+          `Weekly set "${name}" created.\nSlots: ${formatSlotsForBlock(slots)}\nDays: ${formatWeekdays(days)}`,
+          buildWeeklyKeyboard()
+        );
+        await handleBlocksList(ctx, 'WEEKLY');
+        return;
+      }
+    }
+
+    if (pendingAction?.type === 'editMonthly') {
+      if (messageText === MONTHLY_EDIT_ACTION_BUTTONS.cancel) {
+        pendingActions.delete(from.id);
+        await handleBlocksList(ctx, 'MONTHLY');
+        return;
+      }
+      if (messageText === MONTHLY_EDIT_ACTION_BUTTONS.delete) {
+        const block = await QuestionBlockModel.findOneAndDelete({
+          _id: pendingAction.blockId,
+          userId: user._id,
+          type: 'MONTHLY',
+        }).exec();
+        pendingActions.delete(from.id);
+        if (!block) {
+          await ctx.reply('Monthly set not found anymore.', buildMonthlyKeyboard());
+          return;
+        }
+        await ctx.reply(
+          `Monthly set "${block.name}" deleted.`,
+          buildMonthlyKeyboard()
+        );
+        await handleBlocksList(ctx, 'MONTHLY');
+        return;
+      }
+
+      const loadBlock = async () => {
+        const block = await QuestionBlockModel.findOne({
+          _id: pendingAction.blockId,
+          userId: user._id,
+          type: 'MONTHLY',
+        }).exec();
+        return block;
+      };
+
+      if (pendingAction.step === 'menu') {
+        if (messageText === MONTHLY_EDIT_ACTION_BUTTONS.slots) {
+          pendingAction.step = 'setSlots';
+          pendingActions.set(from.id, pendingAction);
+          await ctx.reply(
+            'Enter slots separated by comma: morning, day, evening.',
+            buildMonthlyEditKeyboard()
+          );
+          return;
+        }
+        if (messageText === MONTHLY_EDIT_ACTION_BUTTONS.schedule) {
+          pendingAction.step = 'setSchedule';
+          pendingActions.set(from.id, pendingAction);
+          await ctx.reply(
+            'Enter schedule: "first", "last", or "day:N" (1-28).',
+            buildMonthlyEditKeyboard()
+          );
+          return;
+        }
+        if (messageText === MONTHLY_EDIT_ACTION_BUTTONS.name) {
+          pendingAction.step = 'setName';
+          pendingActions.set(from.id, pendingAction);
+          await ctx.reply('Enter new name for this monthly set:', buildMonthlyEditKeyboard());
+          return;
+        }
+        if (messageText === MONTHLY_EDIT_ACTION_BUTTONS.q1) {
+          pendingAction.step = 'setQ1';
+          pendingActions.set(from.id, pendingAction);
+          await ctx.reply('Enter question 1:', buildMonthlyEditKeyboard());
+          return;
+        }
+        if (messageText === MONTHLY_EDIT_ACTION_BUTTONS.q2) {
+          pendingAction.step = 'setQ2';
+          pendingActions.set(from.id, pendingAction);
+          await ctx.reply('Enter question 2:', buildMonthlyEditKeyboard());
+          return;
+        }
+        if (messageText === MONTHLY_EDIT_ACTION_BUTTONS.q3) {
+          pendingAction.step = 'setQ3';
+          pendingActions.set(from.id, pendingAction);
+          await ctx.reply('Enter question 3:', buildMonthlyEditKeyboard());
+          return;
+        }
+
+        await ctx.reply(
+          'Choose what to change using the buttons.',
+          buildMonthlyEditKeyboard()
+        );
+        return;
+      }
+
+      const block = await loadBlock();
+      if (!block) {
+        pendingActions.delete(from.id);
+        await ctx.reply('Monthly set not found anymore.', buildMonthlyKeyboard());
+        return;
+      }
+
+      const finishAndShow = async (extraLines: string[]) => {
+        pendingActions.delete(from.id);
+        await ctx.reply(extraLines.join('\n'), buildMonthlyKeyboard([block]));
+        await handleBlocksList(ctx, 'MONTHLY');
+      };
+
+      if (pendingAction.step === 'setSlots') {
+        const parsed = parseSlotsFlag(messageText);
+        if (!parsed) {
+          await ctx.reply(
+            'Slots flag must contain morning, day, evening separated by commas. Example: morning,evening',
+            buildMonthlyEditKeyboard()
+          );
+          return;
+        }
+        block.slots = parsed;
+        await block.save();
+        await finishAndShow([
+          `Saved monthly set "${block.name}".`,
+          `Slots: ${formatSlotsForBlock(block.slots)}`,
+        ]);
+        return;
+      }
+
+      if (pendingAction.step === 'setSchedule') {
+        const parsed = parseMonthScheduleInput(messageText);
+        if (!parsed) {
+          await ctx.reply(
+            'Schedule must be "first", "last", or "day:N" where N is 1-28.',
+            buildMonthlyEditKeyboard()
+          );
+          return;
+        }
+        block.monthSchedule = parsed;
+        await block.save();
+        await finishAndShow([
+          `Saved monthly set "${block.name}".`,
+          `Schedule: ${formatMonthSchedule(parsed)}`,
+        ]);
+        return;
+      }
+
+      if (pendingAction.step === 'setName') {
+        const newName = messageText.trim();
+        if (!newName) {
+          await ctx.reply('Name cannot be empty.', buildMonthlyEditKeyboard());
+          return;
+        }
+        block.name = newName;
+        await block.save();
+        await finishAndShow([`Saved monthly set "${block.name}".`]);
+        return;
+      }
+
+      const questions = [...block.questions].sort((a, b) => a.order - b.order);
+
+      const updateQuestion = async (index: number, text: string) => {
+        const clean = text.trim();
+        if (!clean) {
+          await ctx.reply('Question cannot be empty.', buildMonthlyEditKeyboard());
+          return;
+        }
+        while (questions.length < index + 1) {
+          questions.push({
+            key: `q${questions.length + 1}`,
+            text: '',
+            order: questions.length,
+          });
+        }
+        questions[index] = {
+          ...questions[index],
+          key: `q${index + 1}`,
+          text: clean,
+          order: index,
+        };
+        block.questions = questions;
+        await block.save();
+        await finishAndShow([
+          `Saved monthly set "${block.name}".`,
+          'Questions:',
+          ...block.questions
+            .sort((a, b) => a.order - b.order)
+            .map((q, idx) => `${idx + 1}. ${q.text}`),
+        ]);
+      };
+
+      if (pendingAction.step === 'setQ1') {
+        await updateQuestion(0, messageText);
+        return;
+      }
+      if (pendingAction.step === 'setQ2') {
+        await updateQuestion(1, messageText);
+        return;
+      }
+      if (pendingAction.step === 'setQ3') {
+        await updateQuestion(2, messageText);
+        return;
+      }
+    }
+
+    if (pendingAction?.type === 'createMonthly') {
+      if (pendingAction.step === 'name') {
+        const name = messageText.trim();
+        if (!name) {
+          await ctx.reply('Name cannot be empty.', buildMonthlyEditKeyboard());
+          return;
+        }
+        pendingAction.temp.name = name;
+        pendingAction.step = 'slots';
+        pendingActions.set(from.id, pendingAction);
+        await ctx.reply(
+          'Enter slots separated by comma: morning, day, evening.',
+          buildMonthlyEditKeyboard()
+        );
+        return;
+      }
+
+      if (pendingAction.step === 'slots') {
+        const parsed = parseSlotsFlag(messageText);
+        if (!parsed) {
+          await ctx.reply(
+            'Slots must be comma separated: morning, day, evening (at least one).',
+            buildMonthlyEditKeyboard()
+          );
+          return;
+        }
+        pendingAction.temp.slots = parsed;
+        pendingAction.step = 'schedule';
+        pendingActions.set(from.id, pendingAction);
+        await ctx.reply(
+          'Enter schedule: "first", "last", or "day:N" (1-28).',
+          buildMonthlyEditKeyboard()
+        );
+        return;
+      }
+
+      if (pendingAction.step === 'schedule') {
+        const parsed = parseMonthScheduleInput(messageText);
+        if (!parsed) {
+          await ctx.reply(
+            'Schedule must be "first", "last", or "day:N" where N is 1-28.',
+            buildMonthlyEditKeyboard()
+          );
+          return;
+        }
+        pendingAction.temp.schedule = parsed;
+        pendingAction.step = 'q1';
+        pendingActions.set(from.id, pendingAction);
+        await ctx.reply('Enter question 1:', buildMonthlyEditKeyboard());
+        return;
+      }
+
+      const setQuestion = (idx: 1 | 2 | 3) => {
+        const clean = messageText.trim();
+        if (!clean) {
+          return false;
+        }
+        pendingAction.temp[`q${idx}` as 'q1'] = clean;
+        return true;
+      };
+
+      if (pendingAction.step === 'q1') {
+        if (!setQuestion(1)) {
+          await ctx.reply('Question cannot be empty.', buildMonthlyEditKeyboard());
+          return;
+        }
+        pendingAction.step = 'q2';
+        pendingActions.set(from.id, pendingAction);
+        await ctx.reply('Enter question 2 (or repeat/adjust):', buildMonthlyEditKeyboard());
+        return;
+      }
+
+      if (pendingAction.step === 'q2') {
+        if (!setQuestion(2)) {
+          await ctx.reply('Question cannot be empty.', buildMonthlyEditKeyboard());
+          return;
+        }
+        pendingAction.step = 'q3';
+        pendingActions.set(from.id, pendingAction);
+        await ctx.reply('Enter question 3 (or repeat/adjust):', buildMonthlyEditKeyboard());
+        return;
+      }
+
+      if (pendingAction.step === 'q3') {
+        setQuestion(3);
+
+        const { name, slots, schedule, q1, q2, q3 } = pendingAction.temp;
+        if (!name || !slots || !schedule) {
+          pendingActions.delete(from.id);
+          await ctx.reply('Creation data incomplete. Start over with Add monthly.', buildMonthlyKeyboard());
+          return;
+        }
+
+        const questions = [q1, q2, q3]
+          .filter((q) => (q ?? '').trim().length > 0)
+          .map((q, idx) => ({
+            key: `q${idx + 1}`,
+            text: q!.trim(),
+            order: idx,
+          }));
+
+        if (!questions.length) {
+          pendingActions.delete(from.id);
+          await ctx.reply('Please provide at least one non-empty question. Start over.', buildMonthlyKeyboard());
+          return;
+        }
+
+        await QuestionBlockModel.create({
+          userId: user._id,
+          type: 'MONTHLY',
+          name,
+          slots,
+          monthSchedule: schedule,
+          questions,
+        });
+
+        pendingActions.delete(from.id);
+        await ctx.reply(
+          `Monthly set "${name}" created.\nSlots: ${formatSlotsForBlock(slots)}\nSchedule: ${formatMonthSchedule(schedule)}`,
+          buildMonthlyKeyboard()
+        );
+        await handleBlocksList(ctx, 'MONTHLY');
+        return;
+      }
+    }
+
+    if (pendingAction?.type === 'createDaily') {
+      if (pendingAction.step === 'name') {
+        const name = messageText.trim();
+        if (!name) {
+          await ctx.reply('Name cannot be empty.', buildDailyEditKeyboard());
+          return;
+        }
+        pendingAction.temp.name = name;
+        pendingAction.step = 'slot';
+        pendingActions.set(from.id, pendingAction);
+        await ctx.reply(
+          'Enter slot: MORNING, DAY, or EVENING.',
+          buildDailyEditKeyboard()
+        );
+        return;
+      }
+
+      if (pendingAction.step === 'slot') {
+        const slot = slotCodeFromString(messageText);
+        if (!slot) {
+          await ctx.reply(
+            'Unknown slot. Use MORNING, DAY, or EVENING.',
+            buildDailyEditKeyboard()
+          );
+          return;
+        }
+        pendingAction.temp.slot = slot;
+        pendingAction.step = 'q1';
+        pendingActions.set(from.id, pendingAction);
+        await ctx.reply('Enter question 1:', buildDailyEditKeyboard());
+        return;
+      }
+
+      const setQ = (idx: 1 | 2 | 3) => {
+        const clean = messageText.trim();
+        if (!clean) return false;
+        pendingAction.temp[`q${idx}` as 'q1'] = clean;
+        return true;
+      };
+
+      if (pendingAction.step === 'q1') {
+        if (!setQ(1)) {
+          await ctx.reply('Question cannot be empty.', buildDailyEditKeyboard());
+          return;
+        }
+        pendingAction.step = 'q2';
+        pendingActions.set(from.id, pendingAction);
+        await ctx.reply('Enter question 2 (or repeat/adjust):', buildDailyEditKeyboard());
+        return;
+      }
+
+      if (pendingAction.step === 'q2') {
+        if (!setQ(2)) {
+          await ctx.reply('Question cannot be empty.', buildDailyEditKeyboard());
+          return;
+        }
+        pendingAction.step = 'q3';
+        pendingActions.set(from.id, pendingAction);
+        await ctx.reply('Enter question 3 (or repeat/adjust):', buildDailyEditKeyboard());
+        return;
+      }
+
+      if (pendingAction.step === 'q3') {
+        setQ(3);
+        const { name, slot, q1, q2, q3 } = pendingAction.temp;
+        if (!name || !slot) {
+          pendingActions.delete(from.id);
+          await ctx.reply('Creation data incomplete. Start over with Add daily.', buildDailyKeyboard());
+          return;
+        }
+
+        const questions = [q1, q2, q3]
+          .filter((q) => (q ?? '').trim().length > 0)
+          .map((q, idx) => ({
+            key: `q${idx + 1}`,
+            text: q!.trim(),
+            order: idx,
+          }));
+
+        if (!questions.length) {
+          pendingActions.delete(from.id);
+          await ctx.reply('Please provide at least one non-empty question. Start over.', buildDailyKeyboard());
+          return;
+        }
+
+        await QuestionBlockModel.create({
+          userId: user._id,
+          type: 'DAILY',
+          name,
+          slots: {
+            morning: slot === 'MORNING',
+            day: slot === 'DAY',
+            evening: slot === 'EVENING',
+          },
+          questions,
+        });
+
+        pendingActions.delete(from.id);
+        await ctx.reply(
+          `Daily set "${name}" created.\nSlot: ${getSlotLabel(slot)}`,
+          buildDailyKeyboard()
+        );
+        await handleBlocksList(ctx, 'DAILY');
+        return;
+      }
+    }
+
     if (pendingAction?.type === 'editDaily') {
+      if (messageText === DAILY_EDIT_ACTION_BUTTONS.delete) {
+        const block = await QuestionBlockModel.findOneAndDelete({
+          _id: pendingAction.blockId,
+          userId: user._id,
+          type: 'DAILY',
+        }).exec();
+        pendingActions.delete(from.id);
+        if (!block) {
+          await ctx.reply('Daily set not found anymore.', buildDailyKeyboard());
+          return;
+        }
+        await ctx.reply(
+          `Daily set "${block.name}" deleted.`,
+          buildDailyKeyboard()
+        );
+        await handleBlocksList(ctx, 'DAILY');
+        return;
+      }
       if (messageText === DAILY_EDIT_ACTION_BUTTONS.cancel) {
         pendingActions.delete(from.id);
         await handleBlocksList(ctx, 'DAILY');
@@ -2130,8 +3291,34 @@ bot.on('text', async (ctx) => {
       }
     }
 
-    // Daily block selection by name button
+    // Weekly/Daily block selection by name button
     if (messageText.startsWith('✏️ ')) {
+      const name = messageText.replace(/^✏️\s*/, '').trim();
+
+      const monthlyMatch = await QuestionBlockModel.findOne({
+        userId: user._id,
+        name,
+        type: 'MONTHLY',
+      })
+        .lean()
+        .exec();
+      if (monthlyMatch) {
+        await startMonthlyEditFlow(ctx, messageText);
+        return;
+      }
+
+      const weeklyMatch = await QuestionBlockModel.findOne({
+        userId: user._id,
+        name,
+        type: 'WEEKLY',
+      })
+        .lean()
+        .exec();
+      if (weeklyMatch) {
+        await startWeeklyEditFlow(ctx, messageText);
+        return;
+      }
+
       await startDailyEditFlow(ctx, messageText);
       return;
     }
