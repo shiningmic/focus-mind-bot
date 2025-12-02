@@ -1,8 +1,12 @@
 import 'dotenv/config';
-import { Telegraf, type Context } from 'telegraf';
+import { Telegraf, type Context, Markup } from 'telegraf';
 import mongoose from 'mongoose';
 
-import { UserModel, type SlotConfig } from './models/user.model.js';
+import {
+  UserModel,
+  type SlotConfig,
+  type UserDocument,
+} from './models/user.model.js';
 import { QuestionBlockModel } from './models/questionBlock.model.js';
 import { SessionModel, type SessionDocument } from './models/session.model.js';
 import type { SlotCode, SlotMode, QuestionType } from './types/core.js';
@@ -32,6 +36,26 @@ const validatedMongoUri: string = mongoUri;
 const DEFAULT_TIMEZONE = 'Europe/Kyiv';
 
 const pendingResetConfirmation = new Set<number>();
+const pendingActions = new Map<
+  number,
+  { type: 'slot'; slot: SlotCode } | { type: 'timezone' }
+>();
+
+const QUICK_ACTION_LABELS = {
+  morning: '🌅 Morning ✏️',
+  day: '🌤️ Day ✏️',
+  evening: '🌙 Evening ✏️',
+  timezone: '🌐 Timezone ✏️',
+} as const;
+const HELP_BUTTON_LABEL = '❓ Help';
+
+function buildMainKeyboard() {
+  return Markup.keyboard([
+    [QUICK_ACTION_LABELS.morning, QUICK_ACTION_LABELS.day],
+    [QUICK_ACTION_LABELS.evening, QUICK_ACTION_LABELS.timezone],
+    [HELP_BUTTON_LABEL],
+  ]).resize();
+}
 
 function parseTimeToMinutes(time: string): number | null {
   const match = /^(\d{1,2}):(\d{2})$/.exec(time.trim());
@@ -197,7 +221,9 @@ function formatMonthSchedule(
   return 'not set';
 }
 
-function parseSlotsFlag(raw: string): { morning: boolean; day: boolean; evening: boolean } | null {
+function parseSlotsFlag(
+  raw: string
+): { morning: boolean; day: boolean; evening: boolean } | null {
   const values = raw
     .split(',')
     .map((v) => v.trim().toLowerCase())
@@ -216,9 +242,11 @@ function parseSlotsFlag(raw: string): { morning: boolean; day: boolean; evening:
   return flags;
 }
 
-function getPrimarySlotFromFlags(
-  slots: { morning: boolean; day: boolean; evening: boolean }
-): SlotCode {
+function getPrimarySlotFromFlags(slots: {
+  morning: boolean;
+  day: boolean;
+  evening: boolean;
+}): SlotCode {
   if (slots.morning) return 'MORNING';
   if (slots.day) return 'DAY';
   return 'EVENING';
@@ -244,6 +272,140 @@ function buildQuestionPrompt(
   const label = getSlotLabel(slot);
   const progress = total > 1 ? ` (${index + 1}/${total})` : '';
   return `🧭 ${label}${progress}\n\n${questionText}`;
+}
+
+function applySingleSlotUpdate(
+  currentSlots: SlotConfig[] | undefined,
+  slot: SlotCode,
+  parsed: ParsedSlotInput
+): SlotConfig[] {
+  const slots = currentSlots ? [...currentSlots] : [];
+  const existingIndex = slots.findIndex((s) => s.slot === slot);
+
+  const base =
+    parsed.mode === 'FIXED'
+      ? {
+          slot,
+          mode: 'FIXED' as const,
+          timeMinutes: parsed.timeMinutes,
+        }
+      : {
+          slot,
+          mode: 'RANDOM_WINDOW' as const,
+          windowStartMinutes: parsed.windowStartMinutes,
+          windowEndMinutes: parsed.windowEndMinutes,
+        };
+
+  if (existingIndex >= 0) {
+    slots[existingIndex] = {
+      ...slots[existingIndex],
+      ...base,
+    };
+  } else {
+    slots.push(base);
+  }
+
+  const order: SlotCode[] = ['MORNING', 'DAY', 'EVENING'];
+  return slots.sort(
+    (a, b) => order.indexOf(a.slot) - order.indexOf(b.slot)
+  ) as SlotConfig[];
+}
+
+function buildStartMessage(
+  firstName: string,
+  user: { timezone?: string; slots?: SlotConfig[] }
+): string {
+  const slotMap = new Map<SlotCode, SlotConfig>(
+    (user.slots ?? []).map((s) => [s.slot, s])
+  );
+  const morning = slotMap.get('MORNING');
+  const day = slotMap.get('DAY');
+  const evening = slotMap.get('EVENING');
+
+  const morningText =
+    morning?.mode === 'FIXED' && typeof morning.timeMinutes === 'number'
+      ? formatMinutesToTime(morning.timeMinutes)
+      : '09:00';
+
+  const dayText =
+    day?.mode === 'RANDOM_WINDOW' &&
+    typeof day.windowStartMinutes === 'number' &&
+    typeof day.windowEndMinutes === 'number'
+      ? `random between ${formatMinutesToTime(
+          day.windowStartMinutes
+        )}–${formatMinutesToTime(day.windowEndMinutes)}`
+      : 'random between 13:00–15:00';
+
+  const eveningText =
+    evening?.mode === 'FIXED' && typeof evening.timeMinutes === 'number'
+      ? formatMinutesToTime(evening.timeMinutes)
+      : '18:00';
+
+  const tz = user.timezone || DEFAULT_TIMEZONE;
+
+  return (
+    `Hello, ${firstName}! 👋\n\n` +
+    `I am Focus Mind — a Telegram bot for daily, weekly, and monthly self-reflection and productivity.\n\n` +
+    `I have created your profile with default time slots:\n` +
+    `• Morning: ${morningText}\n` +
+    `• Day: ${dayText}\n` +
+    `• Evening: ${eveningText}\n\n` +
+    `Timezone: ${tz}`
+  );
+}
+
+async function sendHelp(ctx: Context): Promise<void> {
+  const lines = [
+    'Available commands:',
+    '/start - Create profile and show intro',
+    '/help - Show this list',
+    '/settings - View timezone and slot schedule',
+    '/timezone <IANA TZ> - Change your timezone',
+    '/slots <M> <D> <E> - Configure daily slots (HH:MM or HH:MM-HH:MM)',
+    '/daily /weekly /monthly - Configure question sets quickly',
+    "/today - Show today's reflection sessions status",
+    '/reflect [skip] - Start or resume a reflection session (use "skip" to jump to the latest slot today)',
+    '/export [json|text] - Export your answers',
+    '/history - Recent reflection history',
+    '/reset - Reset all Focus Mind data (with confirmation)',
+    '/session_start SLOT [YYYY-MM-DD] - Manual session start',
+    '/questions_set ... - Advanced question setup',
+  ];
+
+  await ctx.reply(lines.join('\n'), buildMainKeyboard());
+}
+
+async function startSlotChangeFlow(
+  ctx: Context,
+  user: UserDocument,
+  slot: SlotCode
+): Promise<void> {
+  pendingActions.set(user.telegramId, { type: 'slot', slot });
+  const label = getSlotLabel(slot);
+  await ctx.reply(
+    `What time do you want to set for ${label}? Send either:\n` +
+      `- Fixed time: HH:MM (e.g. 08:30)\n` +
+      `- Random window: HH:MM-HH:MM (e.g. 13:00-15:00)`,
+    buildMainKeyboard()
+  );
+}
+
+async function startTimezoneChangeFlow(
+  ctx: Context,
+  user: UserDocument
+): Promise<void> {
+  pendingActions.set(user.telegramId, { type: 'timezone' });
+  await ctx.reply(
+    'Send a timezone in IANA format, e.g. Europe/Kyiv or America/New_York.',
+    buildMainKeyboard()
+  );
+}
+
+function mapActionTextToSlot(text: string): SlotCode | null {
+  if (text === QUICK_ACTION_LABELS.morning) return 'MORNING';
+  if (text === QUICK_ACTION_LABELS.day) return 'DAY';
+  if (text === QUICK_ACTION_LABELS.evening) return 'EVENING';
+  return null;
 }
 
 function isValidTimezone(timezone: string): boolean {
@@ -523,23 +685,10 @@ bot.start(async (ctx) => {
       // Create default question blocks for this user
       await ensureDefaultQuestionBlocksForUser(user._id);
 
-      await ctx.reply(
-        `Hello, ${firstName}! 👋\n\n` +
-          `I am Focus Mind — a Telegram bot for daily, weekly, and monthly self-reflection and productivity.\n\n` +
-          `I have created your profile with default time slots:\n` +
-          `• Morning: 09:00\n` +
-          `• Day: random between 13:00–15:00\n` +
-          `• Evening: 18:00\n\n` +
-          `Later you will be able to customize your timezone and slot times in settings.`
-      );
+      await ctx.reply(buildStartMessage(firstName, user), buildMainKeyboard());
     } else {
-      await ctx.reply(
-        `Welcome back, ${firstName}! 👋\n\n` +
-          `Your Focus Mind profile already exists.\n` +
-          `Soon I will start sending you reflection sessions based on your configured slots and questions.`
-      );
+      await ctx.reply(buildStartMessage(firstName, user), buildMainKeyboard());
     }
-
   } catch (error) {
     console.error('Error in /start handler:', error);
     await ctx.reply(
@@ -549,24 +698,7 @@ bot.start(async (ctx) => {
 });
 
 bot.command('help', async (ctx) => {
-  const lines = [
-    'Available commands:',
-    '/start - Create profile and show intro',
-    '/help - Show this list',
-    '/settings - View timezone and slot schedule',
-    '/timezone <IANA TZ> - Change your timezone',
-    '/slots <M> <D> <E> - Configure daily slots (HH:MM or HH:MM-HH:MM)',
-    '/daily /weekly /monthly - Configure question sets quickly',
-    "/today - Show today's reflection sessions status",
-    '/reflect [skip] - Start or resume a reflection session (use "skip" to jump to the latest slot today)',
-    '/export [json|text] - Export your answers',
-    '/history - Recent reflection history',
-    '/reset - Reset all Focus Mind data (with confirmation)',
-    '/session_start SLOT [YYYY-MM-DD] - Manual session start',
-    '/questions_set ... - Advanced question setup',
-  ];
-
-  await ctx.reply(lines.join('\n'));
+  await sendHelp(ctx);
 });
 
 // Debug command to test session building logic for today (MORNING slot)
@@ -810,24 +942,8 @@ bot.command('slots', async (ctx) => {
   const messageText = ctx.message?.text ?? '';
   const parts = messageText.trim().split(/\s+/).slice(1);
 
-  if (parts.length < 3) {
-    await ctx.reply(
-      'Configure morning/day/evening times.\n' +
-        'Use HH:MM for fixed or HH:MM-HH:MM for a random window.\n' +
-        'Example: /slots 08:30 13:00-15:00 20:15'
-    );
-    return;
-  }
-
-  const [morningRaw, dayRaw, eveningRaw] = parts;
-  const morningParsed = parseSlotInput(morningRaw);
-  const dayParsed = parseSlotInput(dayRaw);
-  const eveningParsed = parseSlotInput(eveningRaw);
-
-  if (!morningParsed || !dayParsed || !eveningParsed) {
-    await ctx.reply('Could not parse input. Use HH:MM or HH:MM-HH:MM formats.');
-    return;
-  }
+  const maybeTzCmd = parts[0]?.toLowerCase();
+  const maybeTzValue = parts[1];
 
   const from = ctx.from;
   if (!from) {
@@ -838,6 +954,67 @@ bot.command('slots', async (ctx) => {
   const user = await UserModel.findOne({ telegramId: from.id }).exec();
   if (!user) {
     await ctx.reply('Create a profile first using /start');
+    return;
+  }
+
+  if (
+    (maybeTzCmd === 'tz' || maybeTzCmd === 'timezone') &&
+    typeof maybeTzValue === 'string'
+  ) {
+    if (!isValidTimezone(maybeTzValue)) {
+      await ctx.reply(
+        'Unknown timezone. Please provide a valid IANA timezone like Europe/Kyiv or America/New_York.',
+        buildMainKeyboard()
+      );
+      return;
+    }
+
+    user.timezone = maybeTzValue;
+    await user.save();
+
+    await ctx.reply(
+      `Timezone updated to ${user.timezone}`,
+
+      buildMainKeyboard()
+    );
+    return;
+  }
+
+  if (parts.length < 3) {
+    const slotOrder: SlotCode[] = ['MORNING', 'DAY', 'EVENING'];
+    const summaries = slotOrder.map((code) => {
+      const slot = user.slots?.find((s) => s.slot === code);
+      if (!slot) {
+        return `${code}: not configured`;
+      }
+      return formatSlotSummary(slot);
+    });
+
+    const lines = [
+      'Your current settings:',
+      ...summaries.map((s) => `- ${s}`),
+      `- Timezone: ${user.timezone}`,
+      '',
+      'Configure morning/day/evening times.',
+      'Use HH:MM for fixed or HH:MM-HH:MM for a random window.',
+      'Example: /slots 08:30 13:00-15:00 20:15',
+      'Quick timezone change: /slots tz Europe/Kyiv',
+    ];
+
+    await ctx.reply(lines.join('\n'), buildMainKeyboard());
+    return;
+  }
+
+  const [morningRaw, dayRaw, eveningRaw] = parts;
+  const morningParsed = parseSlotInput(morningRaw);
+  const dayParsed = parseSlotInput(dayRaw);
+  const eveningParsed = parseSlotInput(eveningRaw);
+
+  if (!morningParsed || !dayParsed || !eveningParsed) {
+    await ctx.reply(
+      'Could not parse input. Use HH:MM or HH:MM-HH:MM formats.',
+      buildMainKeyboard()
+    );
     return;
   }
 
@@ -853,7 +1030,15 @@ bot.command('slots', async (ctx) => {
     'Saved. Updated slot settings:\n' +
       `- ${formatSlotSummary(user.slots.find((s) => s.slot === 'MORNING')!)}` +
       `\n- ${formatSlotSummary(user.slots.find((s) => s.slot === 'DAY')!)}` +
-      `\n- ${formatSlotSummary(user.slots.find((s) => s.slot === 'EVENING')!)}`
+      `\n- ${formatSlotSummary(
+        user.slots.find((s) => s.slot === 'EVENING')!
+      )}\n` +
+      `- Timezone: ${user.timezone}\n\n` +
+      'Configure morning/day/evening times.\n' +
+      'Use HH:MM for fixed or HH:MM-HH:MM for a random window.\n' +
+      'Example: /slots 08:30 13:00-15:00 20:15\n' +
+      'Quick timezone change: /slots tz Europe/Kyiv',
+    buildMainKeyboard()
   );
 });
 
@@ -911,7 +1096,9 @@ bot.command('questions_set', async (ctx) => {
     | { kind: 'DAY_OF_MONTH' | 'FIRST_DAY' | 'LAST_DAY'; dayOfMonth?: number }
     | undefined;
   let nameOverride: string | undefined;
-  let slotsOverride: { morning: boolean; day: boolean; evening: boolean } | undefined;
+  let slotsOverride:
+    | { morning: boolean; day: boolean; evening: boolean }
+    | undefined;
 
   for (const flag of flags) {
     if (flag.startsWith('days=')) {
@@ -981,7 +1168,11 @@ bot.command('questions_set', async (ctx) => {
   };
   const effectiveSlots = slotsOverride ?? slotFlags;
 
-  if (!effectiveSlots.morning && !effectiveSlots.day && !effectiveSlots.evening) {
+  if (
+    !effectiveSlots.morning &&
+    !effectiveSlots.day &&
+    !effectiveSlots.evening
+  ) {
     await ctx.reply(
       'At least one slot must be selected. Use SLOT argument or --slots flag.'
     );
@@ -1085,7 +1276,9 @@ bot.command(['daily', 'weekly', 'monthly'], async (ctx) => {
 
   const user = await UserModel.findOne({ telegramId: from.id }).exec();
   if (!user) {
-    await ctx.reply('You do not have a FocusMind profile yet. Send /start first.');
+    await ctx.reply(
+      'You do not have a FocusMind profile yet. Send /start first.'
+    );
     return;
   }
 
@@ -1095,13 +1288,18 @@ bot.command(['daily', 'weekly', 'monthly'], async (ctx) => {
 
   if (!blocks.length) {
     const templates: Record<QuestionType, string> = {
-      DAILY: '/questions_set DAILY MORNING What is your focus? | How do you feel?',
-      WEEKLY: '/questions_set WEEKLY EVENING Weekly review? | Main challenge? --days=5',
-      MONTHLY: '/questions_set MONTHLY MORNING Plan month? | Key habits? --month=last',
+      DAILY:
+        '/questions_set DAILY MORNING What is your focus? | How do you feel?',
+      WEEKLY:
+        '/questions_set WEEKLY EVENING Weekly review? | Main challenge? --days=5',
+      MONTHLY:
+        '/questions_set MONTHLY MORNING Plan month? | Key habits? --month=last',
     };
 
     await ctx.reply(
-      `No ${type.toLowerCase()} question sets yet.\nCreate one:\n${templates[type]}`
+      `No ${type.toLowerCase()} question sets yet.\nCreate one:\n${
+        templates[type]
+      }`
     );
     return;
   }
@@ -1109,9 +1307,11 @@ bot.command(['daily', 'weekly', 'monthly'], async (ctx) => {
   const lines: string[] = [];
   lines.push(`Your ${type.toLowerCase()} question sets:`);
 
-  const pickPrimarySlot = (
-    slots: { morning: boolean; day: boolean; evening: boolean }
-  ): SlotCode => {
+  const pickPrimarySlot = (slots: {
+    morning: boolean;
+    day: boolean;
+    evening: boolean;
+  }): SlotCode => {
     if (slots.morning) return 'MORNING';
     if (slots.day) return 'DAY';
     return 'EVENING';
@@ -1193,11 +1393,41 @@ bot.command('settings', async (ctx) => {
 
   const lines = [
     'Your current settings:',
-    `- Timezone: ${user.timezone}`,
     ...summaries.map((s) => `- ${s}`),
+    `- Timezone: ${user.timezone}`,
   ];
 
-  await ctx.reply(lines.join('\n'));
+  await ctx.reply(lines.join('\n'), buildMainKeyboard());
+});
+
+bot.hears(HELP_BUTTON_LABEL, async (ctx) => {
+  await sendHelp(ctx);
+});
+
+bot.hears(Object.values(QUICK_ACTION_LABELS), async (ctx) => {
+  const from = ctx.from;
+  if (!from) {
+    await ctx.reply('Unable to read your Telegram profile. Please try again.');
+    return;
+  }
+
+  const user = await UserModel.findOne({ telegramId: from.id }).exec();
+  if (!user) {
+    await ctx.reply(
+      'You do not have a Focus Mind profile yet. Send /start first.'
+    );
+    return;
+  }
+
+  const slot = mapActionTextToSlot(ctx.message?.text ?? '');
+  if (slot) {
+    await startSlotChangeFlow(ctx, user, slot);
+    return;
+  }
+
+  if ((ctx.message?.text ?? '') === QUICK_ACTION_LABELS.timezone) {
+    await startTimezoneChangeFlow(ctx, user);
+  }
 });
 
 bot.command('timezone', async (ctx) => {
@@ -1489,6 +1719,70 @@ bot.on('text', async (ctx) => {
     if (!user) {
       await ctx.reply(
         'You do not have a Focus Mind profile yet. Send /start first.'
+      );
+      return;
+    }
+
+    const messageText = (ctx.message?.text ?? '').trim();
+
+    if (messageText === HELP_BUTTON_LABEL) {
+      await sendHelp(ctx);
+      return;
+    }
+
+    // Quick action buttons (keyboard)
+    const directSlot = mapActionTextToSlot(messageText);
+    if (directSlot) {
+      await startSlotChangeFlow(ctx, user, directSlot);
+      return;
+    }
+    if (messageText === QUICK_ACTION_LABELS.timezone) {
+      await startTimezoneChangeFlow(ctx, user);
+      return;
+    }
+
+    // Pending interactive flows
+    const pending = pendingActions.get(from.id);
+    if (pending?.type === 'slot') {
+      const parsed = parseSlotInput(messageText);
+      if (!parsed) {
+        await ctx.reply(
+          'Could not parse time. Use HH:MM for fixed or HH:MM-HH:MM for a random window.',
+          buildMainKeyboard()
+        );
+        return;
+      }
+
+      user.slots = applySingleSlotUpdate(user.slots, pending.slot, parsed);
+      await user.save();
+      pendingActions.delete(from.id);
+
+      const updatedSlot = user.slots.find((s) => s.slot === pending.slot)!;
+      await ctx.reply(
+        `Updated ${getSlotLabel(pending.slot)}: ${formatSlotSummary(
+          updatedSlot
+        )}`,
+        buildMainKeyboard()
+      );
+      return;
+    }
+
+    if (pending?.type === 'timezone') {
+      if (!isValidTimezone(messageText)) {
+        await ctx.reply(
+          'Unknown timezone. Please provide a valid IANA timezone like Europe/Kyiv or America/New_York.',
+          buildMainKeyboard()
+        );
+        return;
+      }
+
+      user.timezone = messageText;
+      await user.save();
+      pendingActions.delete(from.id);
+
+      await ctx.reply(
+        `Timezone updated to ${user.timezone}.`,
+        buildMainKeyboard()
       );
       return;
     }
