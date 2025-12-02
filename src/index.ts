@@ -48,12 +48,25 @@ const QUICK_ACTION_LABELS = {
   timezone: '🌐 Timezone ✏️',
 } as const;
 const HELP_BUTTON_LABEL = '❓ Help';
+const SETTINGS_BUTTON_LABELS = {
+  slots: '⚙️ Slots',
+  daily: '📘 Daily',
+  weekly: '📅 Weekly',
+  monthly: '🗓️ Monthly',
+} as const;
 
 function buildMainKeyboard() {
   return Markup.keyboard([
     [QUICK_ACTION_LABELS.morning, QUICK_ACTION_LABELS.day],
     [QUICK_ACTION_LABELS.evening, QUICK_ACTION_LABELS.timezone],
     [HELP_BUTTON_LABEL],
+  ]).resize();
+}
+
+function buildSettingsKeyboard() {
+  return Markup.keyboard([
+    [SETTINGS_BUTTON_LABELS.slots, SETTINGS_BUTTON_LABELS.daily],
+    [SETTINGS_BUTTON_LABELS.weekly, SETTINGS_BUTTON_LABELS.monthly],
   ]).resize();
 }
 
@@ -408,6 +421,16 @@ function mapActionTextToSlot(text: string): SlotCode | null {
   return null;
 }
 
+function mapSettingsButtonToAction(
+  text: string
+): 'slots' | 'daily' | 'weekly' | 'monthly' | null {
+  if (text === SETTINGS_BUTTON_LABELS.slots) return 'slots';
+  if (text === SETTINGS_BUTTON_LABELS.daily) return 'daily';
+  if (text === SETTINGS_BUTTON_LABELS.weekly) return 'weekly';
+  if (text === SETTINGS_BUTTON_LABELS.monthly) return 'monthly';
+  return null;
+}
+
 function isValidTimezone(timezone: string): boolean {
   try {
     new Intl.DateTimeFormat('en-US', { timeZone: timezone }).format(new Date());
@@ -613,6 +636,219 @@ function buildUpdatedSlotConfigs(
       ...base,
     };
   });
+}
+
+async function handleBlocksList(
+  ctx: Context,
+  type: QuestionType
+): Promise<void> {
+  const from = ctx.from;
+
+  if (!from) {
+    await ctx.reply('Unable to read your Telegram profile. Please try again.');
+    return;
+  }
+
+  const user = await UserModel.findOne({ telegramId: from.id }).exec();
+  if (!user) {
+    await ctx.reply(
+      'You do not have a FocusMind profile yet. Send /start first.'
+    );
+    return;
+  }
+
+  const blocks = await QuestionBlockModel.find({ userId: user._id, type })
+    .sort({ createdAt: 1 })
+    .exec();
+
+  if (!blocks.length) {
+    const templates: Record<QuestionType, string> = {
+      DAILY: '/questions_set DAILY MORNING What is your focus? | How do you feel?',
+      WEEKLY: '/questions_set WEEKLY EVENING Weekly review? | Main challenge? --days=5',
+      MONTHLY: '/questions_set MONTHLY MORNING Plan month? | Key habits? --month=last',
+    };
+
+    await ctx.reply(
+      `No ${type.toLowerCase()} question sets yet.\nCreate one:\n${templates[type]}`,
+      buildSettingsKeyboard()
+    );
+    return;
+  }
+
+  const lines: string[] = [];
+  lines.push(`Your ${type.toLowerCase()} question sets:`);
+
+  const pickPrimarySlot = (
+    slots: { morning: boolean; day: boolean; evening: boolean }
+  ): SlotCode => {
+    if (slots.morning) return 'MORNING';
+    if (slots.day) return 'DAY';
+    return 'EVENING';
+  };
+
+  for (const block of blocks) {
+    lines.push('');
+    lines.push(`[${block.name}]`);
+    lines.push(`Slots: ${formatSlotsForBlock(block.slots)}`);
+
+    if (type === 'WEEKLY') {
+      lines.push(`Days: ${formatWeekdays(block.daysOfWeek)}`);
+    }
+
+    if (type === 'MONTHLY') {
+      lines.push(`Month schedule: ${formatMonthSchedule(block.monthSchedule)}`);
+    }
+
+    const questions = [...block.questions].sort((a, b) => a.order - b.order);
+    if (questions.length) {
+      lines.push('Questions:');
+      questions.forEach((q, idx) => lines.push(`${idx + 1}. ${q.text}`));
+    } else {
+      lines.push('Questions: none yet');
+    }
+
+    const slotForUpdate = pickPrimarySlot(block.slots);
+    const slotsFlag = ['morning', 'day', 'evening']
+      .filter((k) => (block.slots as Record<string, boolean>)[k])
+      .join(',');
+
+    const extraFlags: string[] = [];
+    if (slotsFlag) extraFlags.push(`--slots=${slotsFlag}`);
+    if (type === 'WEEKLY' && block.daysOfWeek?.length) {
+      extraFlags.push(`--days=${block.daysOfWeek.join(',')}`);
+    }
+    if (type === 'MONTHLY' && block.monthSchedule) {
+      const ms = block.monthSchedule;
+      if (ms.kind === 'FIRST_DAY') extraFlags.push('--month=first');
+      else if (ms.kind === 'LAST_DAY') extraFlags.push('--month=last');
+      else if (ms.kind === 'DAY_OF_MONTH' && ms.dayOfMonth) {
+        extraFlags.push(`--month=day:${ms.dayOfMonth}`);
+      }
+    }
+
+    const flagsStr = extraFlags.length ? ' ' + extraFlags.join(' ') : '';
+    lines.push(
+      `Change this set: /questions_set ${type} ${slotForUpdate} Question1 | Question2 | Question3${flagsStr}`
+    );
+  }
+
+  await ctx.reply(lines.join('\n'), buildSettingsKeyboard());
+}
+
+async function handleSlotsCommand(
+  ctx: Context,
+  messageTextOverride?: string
+): Promise<void> {
+  const messageText =
+    messageTextOverride ??
+    (typeof ctx.message === 'object' &&
+    ctx.message !== null &&
+    'text' in ctx.message
+      ? (ctx.message as { text?: string }).text ?? ''
+      : '');
+  const parts = messageText.trim().split(/\s+/).slice(1);
+
+  const maybeTzCmd = parts[0]?.toLowerCase();
+  const maybeTzValue = parts[1];
+
+  const from = ctx.from;
+  if (!from) {
+    await ctx.reply('Unable to read your Telegram profile. Please try again.');
+    return;
+  }
+
+  const user = await UserModel.findOne({ telegramId: from.id }).exec();
+  if (!user) {
+    await ctx.reply('Create a profile first using /start');
+    return;
+  }
+
+  if (
+    (maybeTzCmd === 'tz' || maybeTzCmd === 'timezone') &&
+    typeof maybeTzValue === 'string'
+  ) {
+    if (!isValidTimezone(maybeTzValue)) {
+      await ctx.reply(
+        'Unknown timezone. Please provide a valid IANA timezone like Europe/Kyiv or America/New_York.',
+        buildMainKeyboard()
+      );
+      return;
+    }
+
+    user.timezone = maybeTzValue;
+    await user.save();
+
+    await ctx.reply(
+      `Timezone updated to ${user.timezone}.\n\n` +
+        'Configure morning/day/evening times.\n' +
+        'Use HH:MM for fixed or HH:MM-HH:MM for a random window.\n' +
+        'Example: /slots 08:30 13:00-15:00 20:15\n' +
+        'Quick timezone change: /slots tz Europe/Kyiv',
+      buildMainKeyboard()
+    );
+    return;
+  }
+
+  if (parts.length < 3) {
+    const slotOrder: SlotCode[] = ['MORNING', 'DAY', 'EVENING'];
+    const summaries = slotOrder.map((code) => {
+      const slot = user.slots?.find((s) => s.slot === code);
+      if (!slot) {
+        return `${code}: not configured`;
+      }
+      return formatSlotSummary(slot);
+    });
+
+    const lines = [
+      'Your current settings:',
+      ...summaries.map((s) => `- ${s}`),
+      `- Timezone: ${user.timezone}`,
+      '',
+      'Configure morning/day/evening times.',
+      'Use HH:MM for fixed or HH:MM-HH:MM for a random window.',
+      'Example: /slots 08:30 13:00-15:00 20:15',
+      'Quick timezone change: /slots tz Europe/Kyiv',
+    ];
+
+    await ctx.reply(lines.join('\n'), buildMainKeyboard());
+    return;
+  }
+
+  const [morningRaw, dayRaw, eveningRaw] = parts;
+  const morningParsed = parseSlotInput(morningRaw);
+  const dayParsed = parseSlotInput(dayRaw);
+  const eveningParsed = parseSlotInput(eveningRaw);
+
+  if (!morningParsed || !dayParsed || !eveningParsed) {
+    await ctx.reply(
+      'Could not parse input. Use HH:MM or HH:MM-HH:MM formats.',
+      buildMainKeyboard()
+    );
+    return;
+  }
+
+  user.slots = buildUpdatedSlotConfigs(user.slots ?? [], {
+    MORNING: morningParsed,
+    DAY: dayParsed,
+    EVENING: eveningParsed,
+  });
+
+  await user.save();
+
+  await ctx.reply(
+    'Saved. Updated slot settings:\n' +
+      `- ${formatSlotSummary(user.slots.find((s) => s.slot === 'MORNING')!)}` +
+      `\n- ${formatSlotSummary(user.slots.find((s) => s.slot === 'DAY')!)}` +
+      `\n- ${formatSlotSummary(
+        user.slots.find((s) => s.slot === 'EVENING')!
+      )}\n` +
+      `- Timezone: ${user.timezone}\n\n` +
+      'Configure morning/day/evening times.\n' +
+      'Use HH:MM for fixed or HH:MM-HH:MM for a random window.\n' +
+      'Example: /slots 08:30 13:00-15:00 20:15\n' +
+      'Quick timezone change: /slots tz Europe/Kyiv',
+    buildMainKeyboard()
+  );
 }
 
 // Default slot configuration for a new user
@@ -939,107 +1175,7 @@ bot.command('set_slots_time', async (ctx) => {
 });
 
 bot.command('slots', async (ctx) => {
-  const messageText = ctx.message?.text ?? '';
-  const parts = messageText.trim().split(/\s+/).slice(1);
-
-  const maybeTzCmd = parts[0]?.toLowerCase();
-  const maybeTzValue = parts[1];
-
-  const from = ctx.from;
-  if (!from) {
-    await ctx.reply('Unable to read your Telegram profile. Please try again.');
-    return;
-  }
-
-  const user = await UserModel.findOne({ telegramId: from.id }).exec();
-  if (!user) {
-    await ctx.reply('Create a profile first using /start');
-    return;
-  }
-
-  if (
-    (maybeTzCmd === 'tz' || maybeTzCmd === 'timezone') &&
-    typeof maybeTzValue === 'string'
-  ) {
-    if (!isValidTimezone(maybeTzValue)) {
-      await ctx.reply(
-        'Unknown timezone. Please provide a valid IANA timezone like Europe/Kyiv or America/New_York.',
-        buildMainKeyboard()
-      );
-      return;
-    }
-
-    user.timezone = maybeTzValue;
-    await user.save();
-
-    await ctx.reply(
-      `Timezone updated to ${user.timezone}`,
-
-      buildMainKeyboard()
-    );
-    return;
-  }
-
-  if (parts.length < 3) {
-    const slotOrder: SlotCode[] = ['MORNING', 'DAY', 'EVENING'];
-    const summaries = slotOrder.map((code) => {
-      const slot = user.slots?.find((s) => s.slot === code);
-      if (!slot) {
-        return `${code}: not configured`;
-      }
-      return formatSlotSummary(slot);
-    });
-
-    const lines = [
-      'Your current settings:',
-      ...summaries.map((s) => `- ${s}`),
-      `- Timezone: ${user.timezone}`,
-      '',
-      'Configure morning/day/evening times.',
-      'Use HH:MM for fixed or HH:MM-HH:MM for a random window.',
-      'Example: /slots 08:30 13:00-15:00 20:15',
-      'Quick timezone change: /slots tz Europe/Kyiv',
-    ];
-
-    await ctx.reply(lines.join('\n'), buildMainKeyboard());
-    return;
-  }
-
-  const [morningRaw, dayRaw, eveningRaw] = parts;
-  const morningParsed = parseSlotInput(morningRaw);
-  const dayParsed = parseSlotInput(dayRaw);
-  const eveningParsed = parseSlotInput(eveningRaw);
-
-  if (!morningParsed || !dayParsed || !eveningParsed) {
-    await ctx.reply(
-      'Could not parse input. Use HH:MM or HH:MM-HH:MM formats.',
-      buildMainKeyboard()
-    );
-    return;
-  }
-
-  user.slots = buildUpdatedSlotConfigs(user.slots ?? [], {
-    MORNING: morningParsed,
-    DAY: dayParsed,
-    EVENING: eveningParsed,
-  });
-
-  await user.save();
-
-  await ctx.reply(
-    'Saved. Updated slot settings:\n' +
-      `- ${formatSlotSummary(user.slots.find((s) => s.slot === 'MORNING')!)}` +
-      `\n- ${formatSlotSummary(user.slots.find((s) => s.slot === 'DAY')!)}` +
-      `\n- ${formatSlotSummary(
-        user.slots.find((s) => s.slot === 'EVENING')!
-      )}\n` +
-      `- Timezone: ${user.timezone}\n\n` +
-      'Configure morning/day/evening times.\n' +
-      'Use HH:MM for fixed or HH:MM-HH:MM for a random window.\n' +
-      'Example: /slots 08:30 13:00-15:00 20:15\n' +
-      'Quick timezone change: /slots tz Europe/Kyiv',
-    buildMainKeyboard()
-  );
+  await handleSlotsCommand(ctx);
 });
 
 // Command to create/update a question block for a slot
@@ -1267,103 +1403,7 @@ bot.command(['daily', 'weekly', 'monthly'], async (ctx) => {
   const command =
     ctx.message?.text?.split(/\s+/)[0]?.replace('/', '') ?? 'daily';
   const type = command.toUpperCase() as QuestionType;
-  const from = ctx.from;
-
-  if (!from) {
-    await ctx.reply('Unable to read your Telegram profile. Please try again.');
-    return;
-  }
-
-  const user = await UserModel.findOne({ telegramId: from.id }).exec();
-  if (!user) {
-    await ctx.reply(
-      'You do not have a FocusMind profile yet. Send /start first.'
-    );
-    return;
-  }
-
-  const blocks = await QuestionBlockModel.find({ userId: user._id, type })
-    .sort({ createdAt: 1 })
-    .exec();
-
-  if (!blocks.length) {
-    const templates: Record<QuestionType, string> = {
-      DAILY:
-        '/questions_set DAILY MORNING What is your focus? | How do you feel?',
-      WEEKLY:
-        '/questions_set WEEKLY EVENING Weekly review? | Main challenge? --days=5',
-      MONTHLY:
-        '/questions_set MONTHLY MORNING Plan month? | Key habits? --month=last',
-    };
-
-    await ctx.reply(
-      `No ${type.toLowerCase()} question sets yet.\nCreate one:\n${
-        templates[type]
-      }`
-    );
-    return;
-  }
-
-  const lines: string[] = [];
-  lines.push(`Your ${type.toLowerCase()} question sets:`);
-
-  const pickPrimarySlot = (slots: {
-    morning: boolean;
-    day: boolean;
-    evening: boolean;
-  }): SlotCode => {
-    if (slots.morning) return 'MORNING';
-    if (slots.day) return 'DAY';
-    return 'EVENING';
-  };
-
-  for (const block of blocks) {
-    lines.push('');
-    lines.push(`[${block.name}]`);
-    lines.push(`Slots: ${formatSlotsForBlock(block.slots)}`);
-
-    if (type === 'WEEKLY') {
-      lines.push(`Days: ${formatWeekdays(block.daysOfWeek)}`);
-    }
-
-    if (type === 'MONTHLY') {
-      lines.push(`Month schedule: ${formatMonthSchedule(block.monthSchedule)}`);
-    }
-
-    const questions = [...block.questions].sort((a, b) => a.order - b.order);
-    if (questions.length) {
-      lines.push('Questions:');
-      questions.forEach((q, idx) => lines.push(`${idx + 1}. ${q.text}`));
-    } else {
-      lines.push('Questions: none yet');
-    }
-
-    const slotForUpdate = pickPrimarySlot(block.slots);
-    const slotsFlag = ['morning', 'day', 'evening']
-      .filter((k) => (block.slots as Record<string, boolean>)[k])
-      .join(',');
-
-    const extraFlags: string[] = [];
-    if (slotsFlag) extraFlags.push(`--slots=${slotsFlag}`);
-    if (type === 'WEEKLY' && block.daysOfWeek?.length) {
-      extraFlags.push(`--days=${block.daysOfWeek.join(',')}`);
-    }
-    if (type === 'MONTHLY' && block.monthSchedule) {
-      const ms = block.monthSchedule;
-      if (ms.kind === 'FIRST_DAY') extraFlags.push('--month=first');
-      else if (ms.kind === 'LAST_DAY') extraFlags.push('--month=last');
-      else if (ms.kind === 'DAY_OF_MONTH' && ms.dayOfMonth) {
-        extraFlags.push(`--month=day:${ms.dayOfMonth}`);
-      }
-    }
-
-    const flagsStr = extraFlags.length ? ' ' + extraFlags.join(' ') : '';
-    lines.push(
-      `Change this set: /questions_set ${type} ${slotForUpdate} Question1 | Question2 | Question3${flagsStr}`
-    );
-  }
-
-  await ctx.reply(lines.join('\n'));
+  await handleBlocksList(ctx, type);
 });
 
 // Command to show current settings: timezone and slot timings
@@ -1382,26 +1422,114 @@ bot.command('settings', async (ctx) => {
     return;
   }
 
+  const blocks = await QuestionBlockModel.find({ userId: user._id })
+    .sort({ type: 1, createdAt: 1 })
+    .lean()
+    .exec();
+
+  const blocksByType: Record<QuestionType, typeof blocks> = {
+    DAILY: [],
+    WEEKLY: [],
+    MONTHLY: [],
+  };
+  for (const b of blocks) {
+    blocksByType[b.type as QuestionType].push(b);
+  }
+
   const slotOrder: SlotCode[] = ['MORNING', 'DAY', 'EVENING'];
-  const summaries = slotOrder.map((code) => {
-    const slot = user.slots?.find((s) => s.slot === code);
-    if (!slot) {
-      return `${code}: not configured`;
-    }
-    return formatSlotSummary(slot);
-  });
+  const lines = ['Your current settings:'];
 
-  const lines = [
-    'Your current settings:',
-    ...summaries.map((s) => `- ${s}`),
+  const slotMap = new Map<SlotCode, SlotConfig>(
+    (user.slots ?? []).map((s) => [s.slot, s])
+  );
+
+  lines.push(
+    `- Morning: ${formatSlotSummary(slotMap.get('MORNING')!)}`,
+    `- Day: ${formatSlotSummary(slotMap.get('DAY')!)}`,
+    `- Evening: ${formatSlotSummary(slotMap.get('EVENING')!)}`,
     `- Timezone: ${user.timezone}`,
-  ];
+    '',
+    'Configured question blocks:'
+  );
 
-  await ctx.reply(lines.join('\n'), buildMainKeyboard());
+  const formatQuestions = (qs: { order: number; text: string }[]) =>
+    qs
+      .sort((a, b) => a.order - b.order)
+      .map((q, idx) => `${idx + 1}. ${q.text}`)
+      .join('\n');
+
+  const pushBlocks = (
+    type: QuestionType,
+    title: string,
+    extra: (b: any) => string | null = () => null
+  ) => {
+    const order: Array<'morning' | 'day' | 'evening'> = [
+      'morning',
+      'day',
+      'evening',
+    ];
+    const list = [...blocksByType[type]].sort((a, b) => {
+      const aSlotIndex = order.findIndex((s) => (a.slots as any)[s]);
+      const bSlotIndex = order.findIndex((s) => (b.slots as any)[s]);
+      const aIdx = aSlotIndex === -1 ? order.length : aSlotIndex;
+      const bIdx = bSlotIndex === -1 ? order.length : bSlotIndex;
+      return aIdx - bIdx;
+    });
+    lines.push(title);
+    if (!list.length) {
+      lines.push('- none');
+      lines.push('');
+      return;
+    }
+    for (const block of list) {
+      lines.push(`- ${block.name}`);
+      lines.push(`  Slots: ${formatSlotsForBlock(block.slots)}`);
+      const extraLine = extra(block);
+      if (extraLine) lines.push(`  ${extraLine}`);
+      const qText = formatQuestions(block.questions ?? []);
+      lines.push(
+        qText
+          ? `  Questions:\n${qText
+              .split('\n')
+              .map((l) => '    ' + l)
+              .join('\n')}`
+          : '  Questions: none'
+      );
+      lines.push('');
+    }
+  };
+
+  pushBlocks('DAILY', 'Daily blocks:');
+  pushBlocks('WEEKLY', 'Weekly blocks:', (b) =>
+    b.daysOfWeek?.length ? `Days: ${formatWeekdays(b.daysOfWeek)}` : null
+  );
+  pushBlocks('MONTHLY', 'Monthly blocks:', (b) =>
+    b.monthSchedule ? `Schedule: ${formatMonthSchedule(b.monthSchedule)}` : null
+  );
+
+  await ctx.reply(lines.join('\n'), buildSettingsKeyboard());
 });
 
 bot.hears(HELP_BUTTON_LABEL, async (ctx) => {
   await sendHelp(ctx);
+});
+
+bot.hears(Object.values(SETTINGS_BUTTON_LABELS), async (ctx) => {
+  const action = mapSettingsButtonToAction(ctx.message?.text ?? '');
+  if (!action) return;
+
+  if (action === 'slots') {
+    await handleSlotsCommand(ctx, '/slots');
+    return;
+  }
+
+  const typeMap: Record<'daily' | 'weekly' | 'monthly', QuestionType> = {
+    daily: 'DAILY',
+    weekly: 'WEEKLY',
+    monthly: 'MONTHLY',
+  };
+  const type = typeMap[action as 'daily' | 'weekly' | 'monthly'];
+  await handleBlocksList(ctx, type);
 });
 
 bot.hears(Object.values(QUICK_ACTION_LABELS), async (ctx) => {
