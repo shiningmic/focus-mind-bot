@@ -143,7 +143,7 @@ const SessionSchema = new Schema<SessionDocument>(
 );
 
 // Optional: ensure one session per user/slot/date
-SessionSchema.index({ userId: 1, slot: 1, dateKey: 1 }, { unique: false });
+SessionSchema.index({ userId: 1, slot: 1, dateKey: 1 }, { unique: true });
 
 export const SessionModel: Model<SessionDocument> = model<SessionDocument>(
   'Session',

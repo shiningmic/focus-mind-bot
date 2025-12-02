@@ -1,13 +1,14 @@
 import cron from 'node-cron';
+import mongoose, { type Types } from 'mongoose';
 import type { Telegraf } from 'telegraf';
-
-import type { Types } from 'mongoose';
 
 import { UserModel, type SlotConfig } from '../models/user.model.js';
 import { SessionModel } from '../models/session.model.js';
 import { getOrCreateSessionForUserSlotDate } from '../services/session.service.js';
 
 let isSchedulerRunning = false;
+const SEND_RETRY_ATTEMPTS = 3;
+const SEND_RETRY_DELAY_MS = 500;
 const slotOrder: Record<'MORNING' | 'DAY' | 'EVENING', number> = {
   MORNING: 0,
   DAY: 1,
@@ -17,6 +18,7 @@ const randomWindowTargets = new Map<
   string,
   { dateKey: string; minute: number | null }
 >();
+let mongoNotReadyLogged = false;
 
 // Helper: get user's local time and dateKey in their timezone
 function getUserLocalTime(timezone: string): {
@@ -156,6 +158,98 @@ function getRandomWindowMinute(
   return minute;
 }
 
+type TelegramErrorShape = {
+  response?: { error_code?: number; description?: string };
+  statusCode?: number;
+  code?: number | string;
+  message?: string;
+};
+
+function isTelegramBlockError(error: unknown): boolean {
+  const err = (error ?? {}) as TelegramErrorShape;
+  const code = err.response?.error_code ?? err.statusCode ?? err.code;
+  const description = err.response?.description ?? err.message ?? '';
+
+  return (
+    code === 403 ||
+    code === 401 ||
+    /bot was blocked by the user/i.test(description) ||
+    /user is deactivated/i.test(description) ||
+    /chat not found/i.test(description)
+  );
+}
+
+async function markUserAsBlocked(
+  userId: Types.ObjectId,
+  reason: string
+): Promise<void> {
+  await UserModel.updateOne(
+    { _id: userId },
+    {
+      $set: {
+        isTelegramBlocked: true,
+        lastSendError: reason,
+        lastSendErrorAt: new Date(),
+      },
+    }
+  ).exec();
+}
+
+async function clearUserSendError(userId: Types.ObjectId): Promise<void> {
+  await UserModel.updateOne(
+    { _id: userId },
+    {
+      $set: { isTelegramBlocked: false },
+      $unset: { lastSendError: 1, lastSendErrorAt: 1 },
+    }
+  ).exec();
+}
+
+async function sendMessageWithRetry(
+  bot: Telegraf,
+  userId: Types.ObjectId,
+  telegramId: number,
+  text: string
+): Promise<void> {
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= SEND_RETRY_ATTEMPTS; attempt++) {
+    try {
+      await bot.telegram.sendMessage(telegramId, text);
+      await clearUserSendError(userId);
+      return;
+    } catch (error) {
+      lastError = error;
+      const isLastAttempt = attempt === SEND_RETRY_ATTEMPTS;
+
+      if (isTelegramBlockError(error)) {
+        const err = (error ?? {}) as TelegramErrorShape;
+        const reason =
+          err.response?.description ??
+          err.message ??
+          'Telegram blocked/invalid chat';
+        await markUserAsBlocked(userId, reason);
+        console.warn(
+          `  ⚠️ Cannot deliver to telegramId=${telegramId}. Marked as blocked. Reason: ${reason}`
+        );
+        return;
+      }
+
+      if (!isLastAttempt) {
+        await new Promise((resolve) =>
+          setTimeout(resolve, SEND_RETRY_DELAY_MS * attempt)
+        );
+        continue;
+      }
+    }
+  }
+
+  console.error(
+    `  ⚠️ Failed to send message to telegramId=${telegramId} after retries`,
+    lastError
+  );
+}
+
 /**
  * Start cron scheduler (every minute).
  */
@@ -170,8 +264,17 @@ export function startSlotScheduler(bot: Telegraf): void {
     console.log(`⏰ Cron tick at ${tickIso}`);
 
     try {
+      if (mongoose.connection.readyState !== 1) {
+        if (!mongoNotReadyLogged) {
+          console.warn('⚠️ Mongo not connected yet, skipping this tick');
+          mongoNotReadyLogged = true;
+        }
+        return;
+      }
+      mongoNotReadyLogged = false;
+
       const users = await UserModel.find({})
-        .select('telegramId timezone slots')
+        .select('telegramId timezone slots isTelegramBlocked')
         .lean()
         .exec();
 
@@ -182,6 +285,13 @@ export function startSlotScheduler(bot: Telegraf): void {
 
       for (const user of users) {
         const timezone = user.timezone || 'Europe/Kyiv';
+
+        if (user.isTelegramBlocked) {
+          console.log(
+            `?? User ${user._id} is marked as blocked in Telegram, skipping`
+          );
+          continue;
+        }
 
         let localTime;
         try {
@@ -290,7 +400,9 @@ export function startSlotScheduler(bot: Telegraf): void {
             `  📤 Sending first question to telegramId=${user.telegramId}`
           );
 
-          await bot.telegram.sendMessage(
+          await sendMessageWithRetry(
+            bot,
+            user._id,
             user.telegramId,
             `🧠 ${label}${progress}
 

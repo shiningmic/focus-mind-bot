@@ -31,8 +31,6 @@ const validatedMongoUri: string = mongoUri;
 // Default timezone for new users (will be configurable later)
 const DEFAULT_TIMEZONE = 'Europe/Kyiv';
 
-// Flag to ensure scheduler is started only once
-let schedulerStarted = false;
 const pendingResetConfirmation = new Set<number>();
 
 function parseTimeToMinutes(time: string): number | null {
@@ -542,12 +540,6 @@ bot.start(async (ctx) => {
       );
     }
 
-    // Start slot scheduler once, after the first successful /start
-    if (!schedulerStarted) {
-      schedulerStarted = true;
-      startSlotScheduler(bot);
-      console.log('🕒 Slot scheduler started after first /start');
-    }
   } catch (error) {
     console.error('Error in /start handler:', error);
     await ctx.reply(
@@ -1592,6 +1584,7 @@ bot.on('text', async (ctx) => {
 // Application bootstrap
 async function bootstrap(): Promise<void> {
   await connectToDatabase();
+  startSlotScheduler(bot);
   await bot.launch();
   console.log('🤖 Focus Mind bot is up and running');
 }

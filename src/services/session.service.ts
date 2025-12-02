@@ -192,15 +192,28 @@ export async function getOrCreateSessionForUserSlotDate(
   const questions = buildSessionQuestionsFromBlocks(allBlocks);
 
   // Even if there are zero questions, we still can create an empty session
-  const session = await SessionModel.create({
-    userId,
-    slot,
-    dateKey,
-    status: 'pending',
-    questions,
-    currentQuestionIndex: 0,
-    answers: [],
-  });
+  try {
+    const session = await SessionModel.create({
+      userId,
+      slot,
+      dateKey,
+      status: 'pending',
+      questions,
+      currentQuestionIndex: 0,
+      answers: [],
+    });
 
-  return session;
+    return session;
+  } catch (error: any) {
+    // If another request created the session concurrently, return that one
+    if (error?.code === 11000) {
+      const concurrent = await SessionModel.findOne({
+        userId,
+        slot,
+        dateKey,
+      }).exec();
+      if (concurrent) return concurrent;
+    }
+    throw error;
+  }
 }
