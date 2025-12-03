@@ -77,6 +77,10 @@ export async function ensureDefaultQuestionBlocksForUser(
     slots: { DAY: true },
     questions: [
       { key: 'progress', text: '📈 How is your progress so far today?' },
+      {
+        key: 'emotion_now',
+        text: '😬 What emotion are you feeling right now?',
+      },
       { key: 'focus', text: '🎯 Are you focused on what truly matters?' },
     ],
   });
@@ -88,30 +92,13 @@ export async function ensureDefaultQuestionBlocksForUser(
     name: 'Evening Reflection',
     slots: { EVENING: true },
     questions: [
-      { key: 'win', text: '🏆 What was your main win today?' },
-      { key: 'improve', text: '⚙️ What could be improved tomorrow?' },
+      { key: 'main_achievement', text: '🏆 Main achievement today?' },
+      { key: 'top3', text: '🎯 Top 3 tasks for tomorrow?' },
       { key: 'mood_end', text: '🌙 How do you feel at the end of the day?' },
     ],
   });
 
   // === WEEKLY BLOCKS ===
-
-  // Weekly review on Friday evening
-  await createQuestionBlock({
-    userId,
-    type: 'WEEKLY',
-    name: 'Weekly Review',
-    slots: { EVENING: true },
-    daysOfWeek: [5], // Friday
-    questions: [
-      { key: 'weekly_win', text: '🏅 What was your biggest win this week?' },
-      {
-        key: 'weekly_challenge',
-        text: '🧩 What was the main challenge this week?',
-      },
-      { key: 'weekly_lesson', text: '📚 What did you learn this week?' },
-    ],
-  });
 
   // Weekly planning on Monday morning
   await createQuestionBlock({
@@ -132,7 +119,45 @@ export async function ensureDefaultQuestionBlocksForUser(
     ],
   });
 
+  // Weekly review on Friday evening
+  await createQuestionBlock({
+    userId,
+    type: 'WEEKLY',
+    name: 'Weekly Review',
+    slots: { EVENING: true },
+    daysOfWeek: [5], // Friday
+    questions: [
+      { key: 'weekly_win', text: '🏅 What was your biggest win this week?' },
+      {
+        key: 'weekly_challenge',
+        text: '🧩 What was the main challenge this week?',
+      },
+      { key: 'weekly_lesson', text: '📚 What did you learn this week?' },
+    ],
+  });
+
   // === MONTHLY BLOCKS ===
+
+  // Monthly planning on first day of month, morning
+  await createQuestionBlock({
+    userId,
+    type: 'MONTHLY',
+    name: 'Monthly Planning',
+    slots: { MORNING: true },
+    monthSchedule: {
+      kind: 'FIRST_DAY',
+    },
+    questions: [
+      {
+        key: 'month_focus',
+        text: '🎯 What is your main focus for the upcoming month?',
+      },
+      {
+        key: 'month_habits',
+        text: '🔁 Which habits do you want to strengthen this month?',
+      },
+    ],
+  });
 
   // Monthly review on last day of month, evening
   await createQuestionBlock({
@@ -155,27 +180,6 @@ export async function ensureDefaultQuestionBlocksForUser(
       {
         key: 'month_change',
         text: '🔄 What will you change next month?',
-      },
-    ],
-  });
-
-  // Monthly planning on first day of month, morning
-  await createQuestionBlock({
-    userId,
-    type: 'MONTHLY',
-    name: 'Monthly Planning',
-    slots: { MORNING: true },
-    monthSchedule: {
-      kind: 'FIRST_DAY',
-    },
-    questions: [
-      {
-        key: 'month_focus',
-        text: '🎯 What is your main focus for the upcoming month?',
-      },
-      {
-        key: 'month_habits',
-        text: '🔁 Which habits do you want to strengthen this month?',
       },
     ],
   });

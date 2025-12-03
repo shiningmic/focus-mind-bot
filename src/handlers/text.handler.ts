@@ -11,6 +11,7 @@ import {
   QUICK_ACTION_LABELS,
   SETTINGS_BUTTON_LABEL,
   SETTINGS_BUTTON_LABELS,
+  BACK_BUTTON_LABEL,
   CANCEL_BUTTON_LABEL,
   buildDailyKeyboard,
   buildMainKeyboard,
@@ -72,6 +73,11 @@ export function registerTextHandler(bot: Telegraf): void {
       const messageText =
         (ctx.message as { text?: string } | undefined)?.text?.trim() ?? '';
       const pendingAction = pendingActions.get(from.id);
+
+      if (isBackMessage(messageText)) {
+        const handled = await handleBackNavigation(ctx, pendingAction);
+        if (handled) return;
+      }
 
       if (isCancelMessage(messageText)) {
         if (pendingAction) {
@@ -283,6 +289,11 @@ function isCancelMessage(text: string): boolean {
   return text === CANCEL_BUTTON_LABEL || lower === '/cancel' || lower === 'cancel';
 }
 
+function isBackMessage(text: string): boolean {
+  const lower = text.toLowerCase();
+  return text === BACK_BUTTON_LABEL || lower === '/back' || lower === 'back';
+}
+
 function mapActionTextToSlot(text: string): SlotCode | null {
   if (text === QUICK_ACTION_LABELS.morning) return 'MORNING';
   if (text === QUICK_ACTION_LABELS.day) return 'DAY';
@@ -325,4 +336,44 @@ async function startTimezoneChangeFlow(
     'Send a timezone in IANA format, e.g. Europe/Kyiv or America/New_York. Tap Cancel to stop.',
     buildMainKeyboard()
   );
+}
+
+async function handleBackNavigation(
+  ctx: Context,
+  pendingAction: import('../state/pending.js').PendingAction | undefined
+): Promise<boolean> {
+  const fromId = ctx.from?.id;
+  if (!fromId) return false;
+
+  const goToSettings = async () => {
+    const { sendSettings } = await import('../commands/settings.command.js');
+    await sendSettings(ctx);
+  };
+
+  if (pendingAction?.type === 'editDaily' || pendingAction?.type === 'createDaily') {
+    pendingActions.delete(fromId);
+    await handleBlocksList(ctx, 'DAILY');
+    return true;
+  }
+
+  if (pendingAction?.type === 'editWeekly' || pendingAction?.type === 'createWeekly') {
+    pendingActions.delete(fromId);
+    await handleBlocksList(ctx, 'WEEKLY');
+    return true;
+  }
+
+  if (pendingAction?.type === 'editMonthly' || pendingAction?.type === 'createMonthly') {
+    pendingActions.delete(fromId);
+    await handleBlocksList(ctx, 'MONTHLY');
+    return true;
+  }
+
+  if (pendingAction?.type === 'slot' || pendingAction?.type === 'timezone') {
+    pendingActions.delete(fromId);
+    await goToSettings();
+    return true;
+  }
+
+  await goToSettings();
+  return true;
 }

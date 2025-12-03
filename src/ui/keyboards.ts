@@ -9,6 +9,7 @@ export const QUICK_ACTION_LABELS = {
 
 export const HELP_BUTTON_LABEL = '❓ Help';
 export const SETTINGS_BUTTON_LABEL = '⚙️ Settings';
+export const BACK_BUTTON_LABEL = '⬅ Back';
 
 export const SETTINGS_BUTTON_LABELS = {
   slots: '🕒 Slots',
@@ -74,7 +75,7 @@ export function buildSlotKeyboard() {
   return Markup.keyboard([
     [QUICK_ACTION_LABELS.morning, QUICK_ACTION_LABELS.day],
     [QUICK_ACTION_LABELS.evening, QUICK_ACTION_LABELS.timezone],
-    [CANCEL_BUTTON_LABEL],
+    [BACK_BUTTON_LABEL, CANCEL_BUTTON_LABEL],
   ]).resize();
 }
 
@@ -101,11 +102,12 @@ export function buildDailyKeyboard(
   blocks?: Array<{ name: string }>
 ): ReturnType<typeof Markup.keyboard> {
   if (!blocks || blocks.length === 0) {
-    return Markup.keyboard([[ADD_DAILY_BUTTON]]).resize();
+    return Markup.keyboard([[ADD_DAILY_BUTTON], [BACK_BUTTON_LABEL]]).resize();
   }
   const labels = blocks.map((b) => `✏️ ${b.name}`);
   const rows = chunkButtons(labels, 2);
   if (blocks.length < 3) rows.push([ADD_DAILY_BUTTON]);
+  rows.push([BACK_BUTTON_LABEL]);
   return Markup.keyboard(rows).resize();
 }
 
@@ -114,7 +116,7 @@ export function buildDailyEditKeyboard() {
     [DAILY_EDIT_ACTION_BUTTONS.slot, DAILY_EDIT_ACTION_BUTTONS.name],
     [DAILY_EDIT_ACTION_BUTTONS.q1, DAILY_EDIT_ACTION_BUTTONS.q2],
     [DAILY_EDIT_ACTION_BUTTONS.q3, DAILY_EDIT_ACTION_BUTTONS.delete],
-    [DAILY_EDIT_ACTION_BUTTONS.cancel],
+    [BACK_BUTTON_LABEL, DAILY_EDIT_ACTION_BUTTONS.cancel],
   ]).resize();
 }
 
@@ -122,11 +124,12 @@ export function buildWeeklyKeyboard(
   blocks?: Array<{ name: string }>
 ): ReturnType<typeof Markup.keyboard> {
   if (!blocks || blocks.length === 0) {
-    return Markup.keyboard([[ADD_WEEKLY_BUTTON]]).resize();
+    return Markup.keyboard([[ADD_WEEKLY_BUTTON], [BACK_BUTTON_LABEL]]).resize();
   }
   const labels = blocks.map((b) => `✏️ ${b.name}`);
   const rows = chunkButtons(labels, 2);
   if (blocks.length < 3) rows.push([ADD_WEEKLY_BUTTON]);
+  rows.push([BACK_BUTTON_LABEL]);
   return Markup.keyboard(rows).resize();
 }
 
@@ -136,6 +139,7 @@ export function buildWeeklyEditKeyboard() {
     [WEEKLY_EDIT_ACTION_BUTTONS.name, WEEKLY_EDIT_ACTION_BUTTONS.q1],
     [WEEKLY_EDIT_ACTION_BUTTONS.q2, WEEKLY_EDIT_ACTION_BUTTONS.q3],
     [WEEKLY_EDIT_ACTION_BUTTONS.delete, WEEKLY_EDIT_ACTION_BUTTONS.cancel],
+    [BACK_BUTTON_LABEL],
   ]).resize();
 }
 
@@ -143,11 +147,12 @@ export function buildMonthlyKeyboard(
   blocks?: Array<{ name: string }>
 ): ReturnType<typeof Markup.keyboard> {
   if (!blocks || blocks.length === 0) {
-    return Markup.keyboard([[ADD_MONTHLY_BUTTON]]).resize();
+    return Markup.keyboard([[ADD_MONTHLY_BUTTON], [BACK_BUTTON_LABEL]]).resize();
   }
   const labels = blocks.map((b) => `✏️ ${b.name}`);
   const rows = chunkButtons(labels, 2);
   if (blocks.length < 3) rows.push([ADD_MONTHLY_BUTTON]);
+  rows.push([BACK_BUTTON_LABEL]);
   return Markup.keyboard(rows).resize();
 }
 
@@ -157,5 +162,6 @@ export function buildMonthlyEditKeyboard() {
     [MONTHLY_EDIT_ACTION_BUTTONS.name, MONTHLY_EDIT_ACTION_BUTTONS.q1],
     [MONTHLY_EDIT_ACTION_BUTTONS.q2, MONTHLY_EDIT_ACTION_BUTTONS.q3],
     [MONTHLY_EDIT_ACTION_BUTTONS.delete, MONTHLY_EDIT_ACTION_BUTTONS.cancel],
+    [BACK_BUTTON_LABEL],
   ]).resize();
 }
