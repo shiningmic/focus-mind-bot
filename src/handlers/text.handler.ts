@@ -210,51 +210,39 @@ export function registerTextHandler(bot: Telegraf): void {
         );
         return;
       }
-
-      // Handle block selection buttons (✏️ BlockName)
+      // Handle block selection buttons (prefixed with emoji)
       // Only process if no pending action (to avoid conflicts with edit buttons)
-      if (!pendingAction && messageText.startsWith('✏️ ')) {
-        const blockName = messageText.replace(/^✏️\s*/, '').trim();
+      if (!pendingAction) {
+        const match = /^[^\p{L}\p{N}]+(.+)$/u.exec(messageText);
+        if (match) {
+          const blockNameNormalized = match[1].trim().toLowerCase();
 
-        // Try to find block by name
-        const monthlyMatch = await QuestionBlockModel.findOne({
-          userId: user._id,
-          name: blockName,
-          type: 'MONTHLY',
-        })
-          .lean()
-          .exec();
-        if (monthlyMatch) {
-          await startMonthlyEditFlow(ctx, messageText);
+          const findByNormalizedName = async (type: 'DAILY' | 'WEEKLY' | 'MONTHLY') => {
+            const blocks = await QuestionBlockModel.find({ userId: user._id, type })
+              .select('name')
+              .lean()
+              .exec();
+            return blocks.find(
+              (b) => (b.name ?? '').trim().toLowerCase() === blockNameNormalized
+            );
+          };
+
+          if (await findByNormalizedName('MONTHLY')) {
+            await startMonthlyEditFlow(ctx, messageText);
+            return;
+          }
+          if (await findByNormalizedName('WEEKLY')) {
+            await startWeeklyEditFlow(ctx, messageText);
+            return;
+          }
+          if (await findByNormalizedName('DAILY')) {
+            await startDailyEditFlow(ctx, messageText);
+            return;
+          }
+
+          await ctx.reply('Block not found. Please try again.');
           return;
         }
-
-        const weeklyMatch = await QuestionBlockModel.findOne({
-          userId: user._id,
-          name: blockName,
-          type: 'WEEKLY',
-        })
-          .lean()
-          .exec();
-        if (weeklyMatch) {
-          await startWeeklyEditFlow(ctx, messageText);
-          return;
-        }
-
-        const dailyMatch = await QuestionBlockModel.findOne({
-          userId: user._id,
-          name: blockName,
-          type: 'DAILY',
-        })
-          .lean()
-          .exec();
-        if (dailyMatch) {
-          await startDailyEditFlow(ctx, messageText);
-          return;
-        }
-
-        await ctx.reply('Block not found. Please try again.');
-        return;
       }
 
       // If no pending actions – treat text as session answer

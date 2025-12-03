@@ -52,8 +52,10 @@ export async function startDailyEditFlow(
     return aIdx - bIdx;
   });
 
-  const targetName = blockName.replace(/^✏️\s*/, '').trim().toLowerCase();
-  const block = sorted.find((b) => b.name.trim().toLowerCase() === targetName);
+  const targetName = blockName.replace(/^[^\p{L}\p{N}]+/u, '').trim().toLowerCase();
+  const block = sorted.find(
+    (b) => b.name.trim().toLowerCase() === targetName
+  );
   if (!block) {
     await ctx.reply('This daily set does not exist. Try another.');
     return;
@@ -186,7 +188,10 @@ export async function handleEditDailyFlow(
   if (pendingAction.step === 'setSlot') {
     const slot = slotCodeFromString(messageText);
     if (!slot) {
-      await ctx.reply('Unknown slot. Use MORNING, DAY, or EVENING.', buildDailyEditKeyboard());
+      await ctx.reply(
+        'Unknown slot. Use MORNING, DAY, or EVENING.',
+        buildDailyEditKeyboard()
+      );
       return;
     }
     block.slots = {
@@ -228,7 +233,10 @@ export async function handleEditDailyFlow(
   const updateQuestion = async (index: number) => {
     const text = messageText.trim();
     if (!text) {
-      await ctx.reply('Question text cannot be empty.', buildDailyEditKeyboard());
+      await ctx.reply(
+        'Question text cannot be empty.',
+        buildDailyEditKeyboard()
+      );
       return;
     }
     const questions = [...block.questions];
@@ -264,10 +272,24 @@ export async function handleCreateDailyFlow(
     { type: 'createDaily' }
   >
 ): Promise<void> {
+  const maxBlocks = 3;
   let state = { ...(pendingAction.temp || {}) };
   const step = pendingAction.step;
 
   if (step === 'name') {
+    const existingCount = await QuestionBlockModel.countDocuments({
+      userId,
+      type: 'DAILY',
+    }).exec();
+    if (existingCount >= maxBlocks) {
+      pendingActions.delete(ctx.from!.id);
+      await ctx.reply(
+        'You already have 3 daily sets. Delete one to add another.',
+        buildDailyKeyboard()
+      );
+      return;
+    }
+
     const name = messageText.trim();
     if (!name) {
       await ctx.reply('Name cannot be empty.', buildDailyEditKeyboard());
@@ -285,7 +307,10 @@ export async function handleCreateDailyFlow(
   if (step === 'slot') {
     const slot = slotCodeFromString(messageText);
     if (!slot) {
-      await ctx.reply('Unknown slot. Use MORNING, DAY, or EVENING.', buildDailyEditKeyboard());
+      await ctx.reply(
+        'Unknown slot. Use MORNING, DAY, or EVENING.',
+        buildDailyEditKeyboard()
+      );
       return;
     }
     pendingActions.set(ctx.from!.id, {

@@ -50,8 +50,10 @@ export async function startWeeklyEditFlow(
     return aIdx - bIdx;
   });
 
-  const targetName = blockName.replace(/^✏️\s*/, '').trim().toLowerCase();
-  const block = sorted.find((b) => b.name.trim().toLowerCase() === targetName);
+  const targetName = blockName.replace(/^[^\p{L}\p{N}]+/u, '').trim().toLowerCase();
+  const block = sorted.find(
+    (b) => b.name.trim().toLowerCase() === targetName
+  );
 
   if (!block) {
     await ctx.reply('This weekly set does not exist. Try another.');
@@ -189,7 +191,7 @@ export async function handleEditWeeklyFlow(
     if (!slots) {
       await ctx.reply(
         'Invalid slots. Use morning, day, evening separated by commas.',
-        buildWeeklyEditKeyboard()
+      buildWeeklyEditKeyboard()
       );
       return;
     }
@@ -212,7 +214,8 @@ export async function handleEditWeeklyFlow(
       .map((d) => Number.parseInt(d.trim(), 10))
       .filter((n) => Number.isInteger(n) && n >= 1 && n <= 7);
     if (!parsed.length) {
-      await ctx.reply('Provide days 1-7 separated by commas.', buildWeeklyEditKeyboard());
+      await ctx.reply('Provide days 1-7 separated by commas.',
+      buildWeeklyEditKeyboard());
       return;
     }
     block.daysOfWeek = parsed;
@@ -286,10 +289,24 @@ export async function handleCreateWeeklyFlow(
     { type: 'createWeekly' }
   >
 ): Promise<void> {
+  const maxBlocks = 3;
   let state = { ...(pendingAction.temp || {}) };
   const step = pendingAction.step;
 
   if (step === 'name') {
+    const existingCount = await QuestionBlockModel.countDocuments({
+      userId,
+      type: 'WEEKLY',
+    }).exec();
+    if (existingCount >= maxBlocks) {
+      pendingActions.delete(ctx.from!.id);
+      await ctx.reply(
+        'You already have 3 weekly sets. Delete one to add another.',
+        buildWeeklyKeyboard()
+      );
+      return;
+    }
+
     const name = messageText.trim();
     if (!name) {
       await ctx.reply('Name cannot be empty.', buildWeeklyEditKeyboard());

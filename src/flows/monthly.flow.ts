@@ -63,8 +63,10 @@ export async function startMonthlyEditFlow(
     return aIdx - bIdx;
   });
 
-  const targetName = blockName.replace(/^✏️\s*/, '').trim().toLowerCase();
-  const block = sorted.find((b) => b.name.trim().toLowerCase() === targetName);
+  const targetName = blockName.replace(/^[^\p{L}\p{N}]+/u, '').trim().toLowerCase();
+  const block = sorted.find(
+    (b) => b.name.trim().toLowerCase() === targetName
+  );
 
   if (!block) {
     await ctx.reply('This monthly set does not exist. Try another.');
@@ -202,7 +204,7 @@ export async function handleEditMonthlyFlow(
     if (!slots) {
       await ctx.reply(
         'Invalid slots. Use morning, day, evening separated by commas.',
-        buildMonthlyEditKeyboard()
+      buildMonthlyEditKeyboard()
       );
       return;
     }
@@ -222,7 +224,10 @@ export async function handleEditMonthlyFlow(
   if (pendingAction.step === 'setSchedule') {
     const parsed = parseMonthScheduleInput(messageText);
     if (!parsed) {
-      await ctx.reply('Schedule must be: first | last | day:N (1-28).', buildMonthlyEditKeyboard());
+      await ctx.reply(
+        'Schedule must be: first | last | day:N (1-28).',
+        buildMonthlyEditKeyboard()
+      );
       return;
     }
     block.monthSchedule = parsed;
@@ -296,10 +301,24 @@ export async function handleCreateMonthlyFlow(
     { type: 'createMonthly' }
   >
 ): Promise<void> {
+  const maxBlocks = 3;
   let state = { ...(pendingAction.temp || {}) };
   const step = pendingAction.step;
 
   if (step === 'name') {
+    const existingCount = await QuestionBlockModel.countDocuments({
+      userId,
+      type: 'MONTHLY',
+    }).exec();
+    if (existingCount >= maxBlocks) {
+      pendingActions.delete(ctx.from!.id);
+      await ctx.reply(
+        'You already have 3 monthly sets. Delete one to add another.',
+        buildMonthlyKeyboard()
+      );
+      return;
+    }
+
     const name = messageText.trim();
     if (!name) {
       await ctx.reply('Name cannot be empty.', buildMonthlyEditKeyboard());
