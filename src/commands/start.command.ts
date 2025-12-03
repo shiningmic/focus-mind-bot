@@ -1,7 +1,7 @@
 import type { Context, Telegraf } from 'telegraf';
 
 import { DEFAULT_TIMEZONE } from '../config/constants.js';
-import { buildMainKeyboard } from '../ui/keyboards.js';
+import { buildStartKeyboard } from '../ui/keyboards.js';
 import { formatMinutesToTime } from '../utils/time.js';
 import { ensureDefaultQuestionBlocksForUser } from '../services/questionBlock.service.js';
 import { UserModel, type SlotConfig } from '../models/user.model.js';
@@ -98,7 +98,7 @@ export function registerStartCommand(bot: Telegraf): void {
         await ensureDefaultQuestionBlocksForUser(user._id);
       }
 
-      await ctx.reply(buildStartMessage(firstName, user), buildMainKeyboard());
+      await ctx.reply(buildStartMessage(firstName, user), buildStartKeyboard());
     } catch (error) {
       console.error('Error in /start handler:', error);
       await ctx.reply(

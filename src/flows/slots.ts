@@ -1,9 +1,12 @@
 import type { Context } from 'telegraf';
 
-import { buildMainKeyboard } from '../ui/keyboards.js';
+import { buildSlotKeyboard } from '../ui/keyboards.js';
 import { formatSlotSummary } from '../utils/format.js';
 import { parseSlotInput, isValidTimezone } from '../utils/time.js';
-import { applySingleSlotUpdate, buildUpdatedSlotConfigs } from '../services/slots.service.js';
+import {
+  applySingleSlotUpdate,
+  buildUpdatedSlotConfigs,
+} from '../services/slots.service.js';
 import { UserModel } from '../models/user.model.js';
 import type { SlotCode } from '../types/core.js';
 
@@ -42,7 +45,7 @@ export async function handleSlotsCommand(
     if (!isValidTimezone(maybeTzValue)) {
       await ctx.reply(
         'Unknown timezone. Please provide a valid IANA timezone like Europe/Kyiv or America/New_York.',
-        buildMainKeyboard()
+        buildSlotKeyboard()
       );
       return;
     }
@@ -56,7 +59,7 @@ export async function handleSlotsCommand(
         'Use HH:MM for fixed or HH:MM-HH:MM for a random window.\n' +
         'Example: /slots 08:30 13:00-15:00 20:15\n' +
         'Quick timezone change: /slots tz Europe/Kyiv',
-      buildMainKeyboard()
+      buildSlotKeyboard()
     );
     return;
   }
@@ -82,7 +85,7 @@ export async function handleSlotsCommand(
       'Quick timezone change: /slots tz Europe/Kyiv',
     ];
 
-    await ctx.reply(lines.join('\n'), buildMainKeyboard());
+    await ctx.reply(lines.join('\n'), buildSlotKeyboard());
     return;
   }
 
@@ -94,7 +97,7 @@ export async function handleSlotsCommand(
   if (!morningParsed || !dayParsed || !eveningParsed) {
     await ctx.reply(
       'Could not parse input. Use HH:MM or HH:MM-HH:MM formats.',
-      buildMainKeyboard()
+      buildSlotKeyboard()
     );
     return;
   }
@@ -119,6 +122,6 @@ export async function handleSlotsCommand(
       'Use HH:MM for fixed or HH:MM-HH:MM for a random window.\n' +
       'Example: /slots 08:30 13:00-15:00 20:15\n' +
       'Quick timezone change: /slots tz Europe/Kyiv',
-    buildMainKeyboard()
+    buildSlotKeyboard()
   );
 }

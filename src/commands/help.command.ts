@@ -1,6 +1,6 @@
 import type { Context, Telegraf } from 'telegraf';
 
-import { buildMainKeyboard } from '../ui/keyboards.js';
+import { buildSettingKeyboard } from '../ui/keyboards.js';
 
 export function registerHelpCommand(bot: Telegraf): void {
   bot.command('help', async (ctx: Context) => {
@@ -24,7 +24,13 @@ export async function sendHelp(ctx: Context): Promise<void> {
     '/reset - Reset all Focus Mind data (with confirmation)',
     '/session_start SLOT [YYYY-MM-DD] - Manual session start',
     '/questions_set ... - Advanced question setup',
+    '',
+    'What Focus Mind can do:',
+    '- Guide daily, weekly, and monthly reflections',
+    '- Let you customize slots and timezone for reminders',
+    '- Store answers with history, export, and reset options',
+    '- Run manual sessions and tailor questions to your routine',
   ];
 
-  await ctx.reply(lines.join('\n'), buildMainKeyboard());
+  await ctx.reply(lines.join('\n'), buildSettingKeyboard());
 }

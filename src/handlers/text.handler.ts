@@ -9,7 +9,9 @@ import {
   ADD_WEEKLY_BUTTON,
   HELP_BUTTON_LABEL,
   QUICK_ACTION_LABELS,
+  SETTINGS_BUTTON_LABEL,
   SETTINGS_BUTTON_LABELS,
+  CANCEL_BUTTON_LABEL,
   buildDailyKeyboard,
   buildMainKeyboard,
   buildMonthlyKeyboard,
@@ -69,11 +71,30 @@ export function registerTextHandler(bot: Telegraf): void {
 
       const messageText =
         (ctx.message as { text?: string } | undefined)?.text?.trim() ?? '';
+      const pendingAction = pendingActions.get(from.id);
+
+      if (isCancelMessage(messageText)) {
+        if (pendingAction) {
+          pendingActions.delete(from.id);
+          await ctx.reply('Cancelled.', buildMainKeyboard());
+        } else {
+          await ctx.reply('No active action to cancel.', buildMainKeyboard());
+        }
+        return;
+      }
 
       // Quick help
       if (messageText === HELP_BUTTON_LABEL) {
         const { sendHelp } = await import('../commands/help.command.js');
         await sendHelp(ctx);
+        return;
+      }
+
+      if (messageText === SETTINGS_BUTTON_LABEL) {
+        const { sendSettings } = await import(
+          '../commands/settings.command.js'
+        );
+        await sendSettings(ctx);
         return;
       }
 
@@ -124,8 +145,6 @@ export function registerTextHandler(bot: Telegraf): void {
 
       // Handle pending multi-step flows FIRST (before block selection)
       // This ensures edit action buttons are processed correctly
-      const pendingAction = pendingActions.get(from.id);
-
       if (pendingAction?.type === 'slot') {
         const parsed = parseSlotInput(messageText);
         if (!parsed) {
@@ -217,8 +236,13 @@ export function registerTextHandler(bot: Telegraf): void {
         if (match) {
           const blockNameNormalized = match[1].trim().toLowerCase();
 
-          const findByNormalizedName = async (type: 'DAILY' | 'WEEKLY' | 'MONTHLY') => {
-            const blocks = await QuestionBlockModel.find({ userId: user._id, type })
+          const findByNormalizedName = async (
+            type: 'DAILY' | 'WEEKLY' | 'MONTHLY'
+          ) => {
+            const blocks = await QuestionBlockModel.find({
+              userId: user._id,
+              type,
+            })
               .select('name')
               .lean()
               .exec();
@@ -254,6 +278,11 @@ export function registerTextHandler(bot: Telegraf): void {
   });
 }
 
+function isCancelMessage(text: string): boolean {
+  const lower = text.toLowerCase();
+  return text === CANCEL_BUTTON_LABEL || lower === '/cancel' || lower === 'cancel';
+}
+
 function mapActionTextToSlot(text: string): SlotCode | null {
   if (text === QUICK_ACTION_LABELS.morning) return 'MORNING';
   if (text === QUICK_ACTION_LABELS.day) return 'DAY';
@@ -281,7 +310,8 @@ async function startSlotChangeFlow(
   await ctx.reply(
     `What time do you want to set for ${label}? Send either:\n` +
       `- Fixed time: HH:MM (e.g. 08:30)\n` +
-      `- Random window: HH:MM-HH:MM (e.g. 13:00-15:00)`,
+      `- Random window: HH:MM-HH:MM (e.g. 13:00-15:00)\n\n` +
+      'Tap Cancel to stop editing.',
     buildMainKeyboard()
   );
 }
@@ -292,7 +322,7 @@ async function startTimezoneChangeFlow(
 ): Promise<void> {
   pendingActions.set(user.telegramId, { type: 'timezone' });
   await ctx.reply(
-    'Send a timezone in IANA format, e.g. Europe/Kyiv or America/New_York.',
+    'Send a timezone in IANA format, e.g. Europe/Kyiv or America/New_York. Tap Cancel to stop.',
     buildMainKeyboard()
   );
 }

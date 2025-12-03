@@ -6,6 +6,7 @@
   "main": "dist/index.js",
   "scripts": {
     "dev": "npm run build && node dist/index.js",
+    "watch": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
     "sync-indexes": "node --loader ts-node/esm scripts/syncSessionIndexes.ts"
@@ -23,6 +24,7 @@
     "@types/node": "^24.10.1",
     "@types/node-cron": "^3.0.11",
     "ts-node": "^10.9.2",
+    "tsx": "^4.21.0",
     "typescript": "^5.9.3"
   }
 }

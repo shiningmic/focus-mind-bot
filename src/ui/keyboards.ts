@@ -8,9 +8,10 @@ export const QUICK_ACTION_LABELS = {
 } as const;
 
 export const HELP_BUTTON_LABEL = '❓ Help';
+export const SETTINGS_BUTTON_LABEL = '⚙️ Settings';
 
 export const SETTINGS_BUTTON_LABELS = {
-  slots: '⚙️ Slots',
+  slots: '🕒 Slots',
   daily: '📘 Daily',
   weekly: '📅 Weekly',
   monthly: '🗓️ Monthly',
@@ -52,12 +53,33 @@ export const MONTHLY_EDIT_ACTION_BUTTONS = {
   cancel: '❌ Cancel edit',
 } as const;
 
+export const CANCEL_BUTTON_LABEL = '✖ Cancel';
+
+export function buildStartKeyboard() {
+  return Markup.keyboard([
+    [SETTINGS_BUTTON_LABELS.slots, SETTINGS_BUTTON_LABELS.daily],
+    [SETTINGS_BUTTON_LABELS.weekly, SETTINGS_BUTTON_LABELS.monthly],
+    [SETTINGS_BUTTON_LABEL, HELP_BUTTON_LABEL],
+  ]).resize();
+}
+
 export function buildMainKeyboard() {
+  return Markup.keyboard([
+    [SETTINGS_BUTTON_LABEL, HELP_BUTTON_LABEL],
+    [CANCEL_BUTTON_LABEL],
+  ]).resize();
+}
+
+export function buildSlotKeyboard() {
   return Markup.keyboard([
     [QUICK_ACTION_LABELS.morning, QUICK_ACTION_LABELS.day],
     [QUICK_ACTION_LABELS.evening, QUICK_ACTION_LABELS.timezone],
-    [HELP_BUTTON_LABEL],
+    [CANCEL_BUTTON_LABEL],
   ]).resize();
+}
+
+export function buildSettingKeyboard() {
+  return Markup.keyboard([[SETTINGS_BUTTON_LABEL]]).resize();
 }
 
 export function buildSettingsKeyboard() {
