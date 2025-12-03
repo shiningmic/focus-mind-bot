@@ -5,7 +5,7 @@
   "description": "Telegram bot Focus Mind for daily/weekly/monthly reflections",
   "main": "dist/index.js",
   "scripts": {
-    "dev": "node --loader ts-node/esm src/index.ts",
+    "dev": "npm run build && node dist/index.js",
     "build": "tsc",
     "start": "node dist/index.js",
     "sync-indexes": "node --loader ts-node/esm scripts/syncSessionIndexes.ts"
