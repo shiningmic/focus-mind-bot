@@ -150,8 +150,7 @@ export function buildQuestionPrompt(
   total: number
 ): string {
   // Keep the prompt minimal: just the question text (no slot header or progress)
-  const cleaned = stripEmojis(questionText).trim() || questionText;
-  return cleaned;
+  return questionText;
 }
 
 function formatMinutes(minutes: number): string {
