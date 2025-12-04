@@ -135,10 +135,17 @@ export function registerTextHandler(bot: Telegraf): void {
         const { handleReflect } = await import(
           '../commands/reflect.command.js'
         );
-        await handleReflect(ctx, {
-          skipPrevious: true,
-          targetSlot: reminderAction.slot ?? null,
-        });
+        if (reminderAction.action === 'skip') {
+          await handleReflect(ctx, {
+            skipPrevious: true,
+            targetSlot: reminderAction.slot ?? null,
+          });
+        } else if (reminderAction.action === 'start') {
+          await handleReflect(ctx, {
+            skipPrevious: false,
+            targetSlot: reminderAction.slot ?? null,
+          });
+        }
         return;
       }
 
@@ -218,10 +225,10 @@ export function registerTextHandler(bot: Telegraf): void {
         await user.save();
         pendingActions.delete(from.id);
 
-        await ctx.reply(
-          `Timezone updated to ${user.timezone}.`,
-          { ...buildBackKeyboard(), skipNavPush: true } as any
-        );
+        await ctx.reply(`Timezone updated to ${user.timezone}.`, {
+          ...buildBackKeyboard(),
+          skipNavPush: true,
+        } as any);
         return;
       }
 
@@ -323,15 +330,26 @@ function mapActionTextToSlot(text: string): SlotCode | null {
 
 function mapReminderButtonToAction(
   text: string
-): { action: 'skip'; slot?: SlotCode } | null {
+): { action: 'skip' | 'start'; slot?: SlotCode } | null {
   const normalized = text.toLowerCase();
   const startPrefix = REMINDER_BUTTON_LABELS.startPrefix.toLowerCase();
   const skipPrefix = REMINDER_BUTTON_LABELS.skipPrefix.toLowerCase();
 
-  if (normalized.startsWith(startPrefix) || normalized.startsWith(skipPrefix)) {
-    if (normalized.includes('morning')) return { action: 'skip', slot: 'MORNING' };
+  if (normalized.startsWith(startPrefix)) {
+    if (normalized.includes('morning'))
+      return { action: 'start', slot: 'MORNING' };
+    if (normalized.includes('day')) return { action: 'start', slot: 'DAY' };
+    if (normalized.includes('evening'))
+      return { action: 'start', slot: 'EVENING' };
+    return { action: 'start' };
+  }
+
+  if (normalized.startsWith(skipPrefix)) {
+    if (normalized.includes('morning'))
+      return { action: 'skip', slot: 'MORNING' };
     if (normalized.includes('day')) return { action: 'skip', slot: 'DAY' };
-    if (normalized.includes('evening')) return { action: 'skip', slot: 'EVENING' };
+    if (normalized.includes('evening'))
+      return { action: 'skip', slot: 'EVENING' };
     return { action: 'skip' };
   }
 

@@ -32,7 +32,7 @@ export function registerReflectCommand(bot: Telegraf): void {
       const skipPrevious =
         (arg1 ?? '').toLowerCase() === 'skip' ||
         (arg1 ?? '').toLowerCase() === 'current';
-      const targetSlotFromArgs = slotCodeFromString(arg2);
+      const targetSlotFromArgs = arg2 ? slotCodeFromString(arg2) : null;
 
       await handleReflect(ctx, {
         skipPrevious,
