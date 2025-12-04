@@ -82,17 +82,6 @@ function isSlotDueNow(
   return false;
 }
 
-function getSlotLabel(slot: 'MORNING' | 'DAY' | 'EVENING'): string {
-  switch (slot) {
-    case 'MORNING':
-      return 'Morning reflection';
-    case 'DAY':
-      return 'Day reflection';
-    case 'EVENING':
-      return 'Evening reflection';
-  }
-}
-
 async function expireOldSessionsForUser(
   userId: Types.ObjectId,
   todayKey: string
@@ -104,29 +93,6 @@ async function expireOldSessionsForUser(
       dateKey: { $lt: todayKey },
     },
     { status: 'expired' }
-  ).exec();
-}
-
-async function skipEarlierSlotsToday(
-  userId: Types.ObjectId,
-  dateKey: string,
-  currentSlot: 'MORNING' | 'DAY' | 'EVENING'
-): Promise<void> {
-  const currentOrder = slotOrder[currentSlot];
-  const earlierSlots = Object.entries(slotOrder)
-    .filter(([, order]) => order < currentOrder)
-    .map(([code]) => code);
-
-  if (!earlierSlots.length) return;
-
-  await SessionModel.updateMany(
-    {
-      userId,
-      dateKey,
-      slot: { $in: earlierSlots },
-      status: { $in: ['pending', 'in_progress'] },
-    },
-    { status: 'skipped' }
   ).exec();
 }
 
@@ -289,7 +255,7 @@ export function startSlotScheduler(bot: Telegraf): void {
 
         if (user.isTelegramBlocked) {
           console.log(
-            `?? User ${user._id} is marked as blocked in Telegram, skipping`
+            `⚠️ User ${user._id} is marked as blocked in Telegram, skipping`
           );
           continue;
         }
@@ -314,52 +280,83 @@ export function startSlotScheduler(bot: Telegraf): void {
           `📅 User ${user._id} | tz=${timezone} | dateKey=${dateKey} | minutes=${minutesSinceMidnight}`
         );
 
-        for (const slotConfig of user.slots) {
+        // Preload today's sessions to enforce ordering
+        const todaySessions = await SessionModel.find({
+          userId: user._id,
+          dateKey,
+        })
+          .select('slot status')
+          .lean()
+          .exec();
+
+        const statusMap = new Map<
+          'MORNING' | 'DAY' | 'EVENING',
+          { status: string }
+        >();
+        todaySessions.forEach((s) =>
+          statusMap.set(s.slot, { status: s.status as string })
+        );
+
+        // Determine which slots are due at this minute
+        const dueSlots = user.slots
+          .map((slotConfig) => {
+            const randomTarget =
+              slotConfig.mode === 'RANDOM_WINDOW'
+                ? getRandomWindowMinute(
+                    user._id,
+                    dateKey,
+                    slotConfig.slot,
+                    slotConfig.windowStartMinutes,
+                    slotConfig.windowEndMinutes
+                  )
+                : null;
+            const due = isSlotDueNow(
+              slotConfig,
+              minutesSinceMidnight,
+              randomTarget
+            );
+            return { slotConfig, due };
+          })
+          .filter((entry) => entry.due)
+          .sort(
+            (a, b) =>
+              slotOrder[a.slotConfig.slot] - slotOrder[b.slotConfig.slot]
+          );
+
+        for (const { slotConfig } of dueSlots) {
           const slot = slotConfig.slot;
+          const currentOrder = slotOrder[slot];
 
-          const randomTarget =
-            slotConfig.mode === 'RANDOM_WINDOW'
-              ? getRandomWindowMinute(
-                  user._id,
-                  dateKey,
-                  slot,
-                  slotConfig.windowStartMinutes,
-                  slotConfig.windowEndMinutes
-                )
-              : null;
-
-          if (!isSlotDueNow(slotConfig, minutesSinceMidnight, randomTarget)) {
+          // Block this slot if any earlier slot for today is not completed/skipped
+          const earlierIncomplete = Object.entries(slotOrder).some(
+            ([code, order]) => {
+              if (order >= currentOrder) return false;
+              const status = statusMap.get(code as any)?.status;
+              return !status || !['completed', 'skipped'].includes(status);
+            }
+          );
+          if (earlierIncomplete) {
+            console.log(
+              `  ℹ️ Skipping slot ${slot} because earlier slots are not completed`
+            );
             continue;
           }
 
-          console.log(
-            `  ⏱️ Slot ${slot} is due now for user ${user._id} at minutes=${minutesSinceMidnight}`
-          );
-
-          // Check if there is already an in_progress/completed session for this day+slot
-          const alreadyExists = await SessionModel.exists({
-            userId: user._id,
-            slot,
-            dateKey,
-            status: { $in: ['in_progress', 'completed'] },
-          });
-
-          if (alreadyExists) {
+          const status = statusMap.get(slot)?.status;
+          if (status && ['in_progress', 'completed'].includes(status)) {
             console.log(
               `  ℹ️ Session already in progress/completed for ${slot} on ${dateKey}, skipping`
             );
             continue;
           }
 
-          // Skip earlier pending slots for today to keep only current slot active
-          await skipEarlierSlotsToday(user._id, dateKey, slot);
-
-          // Build or load session
           const session = await getOrCreateSessionForUserSlotDate(
             user._id,
             slot,
             dateKey
           );
+
+          statusMap.set(slot, { status: session.status });
 
           console.log(
             `  🗒️ Session ${session._id} created/loaded with ${session.questions.length} questions`
@@ -406,6 +403,9 @@ export function startSlotScheduler(bot: Telegraf): void {
               session.questions.length
             )
           );
+
+          // Trigger only one slot per tick (important when times are identical)
+          break;
         }
       }
     } catch (error: any) {
