@@ -18,6 +18,7 @@ import {
   QUICK_ACTION_LABELS,
   SETTINGS_BUTTON_LABEL,
   SETTINGS_BUTTON_LABELS,
+  REMINDER_BUTTON_LABELS,
   buildDailyKeyboard,
   buildBackKeyboard,
   buildMonthlyKeyboard,
@@ -126,6 +127,18 @@ export function registerTextHandler(bot: Telegraf): void {
 
       if (messageText === QUICK_ACTION_LABELS.timezone) {
         await startTimezoneChangeFlow(ctx, user);
+        return;
+      }
+
+      const reminderAction = mapReminderButtonToAction(messageText);
+      if (reminderAction) {
+        const { handleReflect } = await import(
+          '../commands/reflect.command.js'
+        );
+        await handleReflect(ctx, {
+          skipPrevious: true,
+          targetSlot: reminderAction.slot ?? null,
+        });
         return;
       }
 
@@ -305,6 +318,23 @@ function mapActionTextToSlot(text: string): SlotCode | null {
   if (text === QUICK_ACTION_LABELS.morning) return 'MORNING';
   if (text === QUICK_ACTION_LABELS.day) return 'DAY';
   if (text === QUICK_ACTION_LABELS.evening) return 'EVENING';
+  return null;
+}
+
+function mapReminderButtonToAction(
+  text: string
+): { action: 'skip'; slot?: SlotCode } | null {
+  const normalized = text.toLowerCase();
+  const startPrefix = REMINDER_BUTTON_LABELS.startPrefix.toLowerCase();
+  const skipPrefix = REMINDER_BUTTON_LABELS.skipPrefix.toLowerCase();
+
+  if (normalized.startsWith(startPrefix) || normalized.startsWith(skipPrefix)) {
+    if (normalized.includes('morning')) return { action: 'skip', slot: 'MORNING' };
+    if (normalized.includes('day')) return { action: 'skip', slot: 'DAY' };
+    if (normalized.includes('evening')) return { action: 'skip', slot: 'EVENING' };
+    return { action: 'skip' };
+  }
+
   return null;
 }
 

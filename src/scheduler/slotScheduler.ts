@@ -6,6 +6,7 @@ import { UserModel, type SlotConfig } from '../models/user.model.js';
 import { SessionModel } from '../models/session.model.js';
 import { getOrCreateSessionForUserSlotDate } from '../services/session.service.js';
 import { buildQuestionPrompt } from '../utils/format.js';
+import { buildPendingReminderKeyboard } from '../ui/keyboards.js';
 
 let isSchedulerRunning = false;
 const SEND_RETRY_ATTEMPTS = 3;
@@ -19,6 +20,7 @@ const randomWindowTargets = new Map<
   string,
   { dateKey: string; minute: number | null }
 >();
+const pendingReminderSent = new Set<string>(); // key: userId-date-slot
 let mongoNotReadyLogged = false;
 
 // Helper: get user's local time and dateKey in their timezone
@@ -328,17 +330,44 @@ export function startSlotScheduler(bot: Telegraf): void {
           const currentOrder = slotOrder[slot];
 
           // Block this slot if any earlier slot for today is not completed/skipped
-          const earlierIncomplete = Object.entries(slotOrder).some(
-            ([code, order]) => {
-              if (order >= currentOrder) return false;
+          const earlierIncompleteSlots = Object.entries(slotOrder)
+            .filter(([_, order]) => order < currentOrder)
+            .map(([code]) => code as 'MORNING' | 'DAY' | 'EVENING')
+            .filter((code) => {
               const status = statusMap.get(code as any)?.status;
               return !status || !['completed', 'skipped'].includes(status);
-            }
-          );
-          if (earlierIncomplete) {
+            });
+
+          if (earlierIncompleteSlots.length) {
             console.log(
               `  ℹ️ Skipping slot ${slot} because earlier slots are not completed`
             );
+
+            // Send reminder once per day for this slot
+            const reminderKey = `${user._id.toString()}-${dateKey}-${slot}`;
+            if (!pendingReminderSent.has(reminderKey)) {
+              pendingReminderSent.add(reminderKey);
+              const pendingList = earlierIncompleteSlots
+                .map((s) => s.toLowerCase())
+                .join(', ');
+              const slotLabel = slot.toLowerCase();
+              const text =
+                `${slotLabel[0].toUpperCase()}${slotLabel.slice(
+                  1
+                )} reflection is waiting, but previous sessions are still open (${pendingList}).\n` +
+                `Finish them, or choose an option below.`;
+
+              try {
+                await bot.telegram.sendMessage(user.telegramId, text, {
+                  ...buildPendingReminderKeyboard(slot),
+                });
+              } catch (err) {
+                console.warn(
+                  `  ⚠️ Failed to send reminder for user ${user._id}:`,
+                  err
+                );
+              }
+            }
             continue;
           }
 

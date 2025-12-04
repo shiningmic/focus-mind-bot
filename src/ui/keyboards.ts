@@ -1,4 +1,5 @@
 import { Markup } from 'telegraf';
+import type { SlotCode } from '../types/core.js';
 
 export const QUICK_ACTION_LABELS = {
   morning: '🌅 Morning ⌛',
@@ -53,6 +54,29 @@ export const MONTHLY_EDIT_ACTION_BUTTONS = {
   delete: '🗑️ Delete set',
   back: BACK_BUTTON_LABEL,
 } as const;
+
+export const REMINDER_BUTTON_LABELS = {
+  startPrefix: '💬 Start',
+  skipPrefix: '⏭️ Skip previous and start',
+} as const;
+
+function slotTitle(slot: SlotCode): string {
+  switch (slot) {
+    case 'MORNING':
+      return 'Morning';
+    case 'DAY':
+      return 'Day';
+    case 'EVENING':
+      return 'Evening';
+  }
+}
+
+export function buildPendingReminderKeyboard(slot: SlotCode) {
+  const title = slotTitle(slot);
+  const startLabel = `${REMINDER_BUTTON_LABELS.startPrefix} ${title} reflection`;
+  const skipLabel = `${REMINDER_BUTTON_LABELS.skipPrefix} ${title}`;
+  return Markup.keyboard([[startLabel], [skipLabel]]).resize();
+}
 
 export function buildStartKeyboard() {
   return Markup.keyboard([
