@@ -87,8 +87,10 @@ export function formatSessionExportText(sessions: SessionDocument[]): string {
         session.questions.find((q) => q.key === answer.key) ||
         session.questions[index];
       const questionText = question?.text ?? `Question ${index + 1}`;
-      lines.push(`  Q: ${questionText}`);
-      lines.push(`  A: ${answer.text}`);
+      const cleanedQuestion = stripEmojis(questionText).trim() || questionText;
+
+      lines.push(`• ${cleanedQuestion}`);
+      lines.push(`→ ${answer.text}`);
     });
 
     lines.push('');

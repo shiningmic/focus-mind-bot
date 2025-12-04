@@ -13,7 +13,9 @@ export function registerExportCommand(bot: Telegraf): void {
 
     const from = ctx.from;
     if (!from) {
-      await ctx.reply('Unable to read your Telegram profile. Please try again.');
+      await ctx.reply(
+        'Unable to read your Telegram profile. Please try again.'
+      );
       return;
     }
 
@@ -66,6 +68,6 @@ export function registerExportCommand(bot: Telegraf): void {
     }
 
     const textExport = formatSessionExportText(sessions);
-    await sendInChunks('Here is your data (text):\n' + textExport);
+    await sendInChunks('Here is your data:\n' + textExport);
   });
 }
