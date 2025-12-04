@@ -103,15 +103,14 @@ export function buildSessionCompletionSummary(
   const label = getSlotLabel(session.slot);
   const lines: string[] = [];
 
-  lines.push(`🧠 ${label} session completed for ${session.dateKey}.`);
+  lines.push(`✅ ${escapeMarkdownV2(label)} completed`);
+  lines.push(`📅 Date: *${escapeMarkdownV2(session.dateKey)}*`);
+  lines.push('');
 
   if (session.answers.length === 0) {
-    lines.push('No answers were recorded.');
+    lines.push('_No answers were recorded._');
     return lines.join('\n');
   }
-
-  lines.push('');
-  lines.push('Your answers:');
 
   session.answers.forEach((answer, index) => {
     const question =
@@ -119,8 +118,13 @@ export function buildSessionCompletionSummary(
       session.questions[index];
 
     const questionText = question?.text ?? `Question ${index + 1}`;
-    lines.push(`${index + 1}. ${questionText}`);
-    lines.push(`-> ${answer.text}`);
+    const cleanedQuestion = stripEmojis(questionText).trim() || questionText;
+
+    lines.push(
+      `*${escapeMarkdownV2(cleanedQuestion)}*`,
+      `${escapeMarkdownV2(answer.text)}`,
+      '' // empty line between blocks
+    );
   });
 
   return lines.join('\n');
@@ -143,13 +147,25 @@ export function buildQuestionPrompt(
   index: number,
   total: number
 ): string {
-  const label = getSlotLabel(slot);
-  const progress = total > 1 ? ` (${index + 1}/${total})` : '';
-  return `🧭 ${label}${progress}\n\n${questionText}`;
+  // Keep the prompt minimal: just the question text (no slot header or progress)
+  const cleaned = stripEmojis(questionText).trim() || questionText;
+  return cleaned;
 }
 
 function formatMinutes(minutes: number): string {
   const hours = Math.floor(minutes / 60);
   const mins = minutes % 60;
   return `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
+}
+
+function escapeMarkdownV2(text: string): string {
+  return text.replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&');
+}
+
+function stripEmojis(text: string): string {
+  // Remove most emoji pictographs and presentation characters
+  return text.replace(
+    /[\p{Extended_Pictographic}\p{Emoji_Presentation}]/gu,
+    ''
+  );
 }

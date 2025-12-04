@@ -92,7 +92,11 @@ export async function ensureDefaultQuestionBlocksForUser(
     name: 'Evening Reflection',
     slots: { EVENING: true },
     questions: [
-      { key: 'main_achievement', text: '🏆 Main achievement today?' },
+      {
+        key: 'achievements',
+        text: '🏆 What are your main achievements today?',
+      },
+
       { key: 'top3', text: '🎯 Top 3 tasks for tomorrow?' },
       { key: 'mood_end', text: '🌙 How do you feel at the end of the day?' },
     ],

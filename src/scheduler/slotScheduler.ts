@@ -5,6 +5,7 @@ import type { Telegraf } from 'telegraf';
 import { UserModel, type SlotConfig } from '../models/user.model.js';
 import { SessionModel } from '../models/session.model.js';
 import { getOrCreateSessionForUserSlotDate } from '../services/session.service.js';
+import { buildQuestionPrompt } from '../utils/format.js';
 
 let isSchedulerRunning = false;
 const SEND_RETRY_ATTEMPTS = 3;
@@ -390,12 +391,6 @@ export function startSlotScheduler(bot: Telegraf): void {
           session.lastInteractionAt = new Date();
           await session.save();
 
-          const label = getSlotLabel(slot);
-          const progress =
-            session.questions.length > 1
-              ? ` (${currentIndex + 1}/${session.questions.length})`
-              : '';
-
           console.log(
             `  📤 Sending first question to telegramId=${user.telegramId}`
           );
@@ -404,9 +399,12 @@ export function startSlotScheduler(bot: Telegraf): void {
             bot,
             user._id,
             user.telegramId,
-            `🧠 ${label}${progress}
-
-${question.text}`
+            buildQuestionPrompt(
+              slot,
+              question.text,
+              currentIndex,
+              session.questions.length
+            )
           );
         }
       }

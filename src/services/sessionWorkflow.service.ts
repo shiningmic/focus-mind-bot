@@ -80,7 +80,9 @@ export async function replyWithSessionProgress(
   );
 
   if (currentIndex >= session.questions.length) {
-    await ctx.reply(buildSessionCompletionSummary(session));
+    await ctx.reply(buildSessionCompletionSummary(session), {
+      parse_mode: 'MarkdownV2',
+    });
     return;
   }
 

@@ -75,7 +75,9 @@ export async function handleSessionAnswer(
     session.lastInteractionAt = new Date();
     session.finishedAt = new Date();
     await session.save();
-    await ctx.reply(buildSessionCompletionSummary(session));
+    await ctx.reply(buildSessionCompletionSummary(session), {
+      parse_mode: 'MarkdownV2',
+    });
     return;
   }
 
@@ -87,13 +89,11 @@ export async function handleSessionAnswer(
 
   const nextQuestion = session.questions[session.currentQuestionIndex];
   await ctx.reply(
-    '✅ Saved your answer.\n\n' +
-      buildQuestionPrompt(
-        session.slot,
-        nextQuestion.text,
-        session.currentQuestionIndex,
-        session.questions.length
-      )
+    buildQuestionPrompt(
+      session.slot,
+      nextQuestion.text,
+      session.currentQuestionIndex,
+      session.questions.length
+    )
   );
 }
-
