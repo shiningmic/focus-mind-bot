@@ -1,0 +1,8 @@
+services:
+  bot:
+    build:
+      context: .
+    image: focus-mind-bot
+    restart: unless-stopped
+    env_file: .env
+    command: ["node", "dist/index.js"]
