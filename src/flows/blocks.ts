@@ -104,11 +104,6 @@ export async function handleBlocksList(
         extraFlags.push(`--month=day:${ms.dayOfMonth}`);
       }
     }
-
-    const flagsStr = extraFlags.length ? ' ' + extraFlags.join(' ') : '';
-    lines.push(
-      `Change this set: /questions_set ${type} ${slotForUpdate} Question1 | Question2 | Question3${flagsStr}`
-    );
   }
 
   const keyboard =

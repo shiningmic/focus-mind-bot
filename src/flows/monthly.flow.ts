@@ -147,9 +147,13 @@ export async function handleEditMonthlyFlow(
   const input = messageText.trim().toLowerCase();
 
   if (pendingAction.step === 'menu') {
-    if (input === 'cancel' || input === MONTHLY_EDIT_ACTION_BUTTONS.cancel.toLowerCase()) {
+    if (input === 'back' || input === MONTHLY_EDIT_ACTION_BUTTONS.back.toLowerCase()) {
       pendingActions.delete(ctx.from!.id);
-      await ctx.reply('Edit cancelled.', buildMonthlyKeyboard());
+      const blocks = await QuestionBlockModel.find({ userId, type: 'MONTHLY' })
+        .sort({ createdAt: 1 })
+        .lean()
+        .exec();
+      await ctx.reply('Back.', buildMonthlyKeyboard(blocks));
       return;
     }
     if (input === 'delete' || input === MONTHLY_EDIT_ACTION_BUTTONS.delete.toLowerCase()) {
@@ -193,7 +197,7 @@ export async function handleEditMonthlyFlow(
       return;
     }
     await ctx.reply(
-      'Unknown action. Use buttons or send: slots | schedule | name | q1 | q2 | q3 | delete | cancel',
+      'Unknown action. Use buttons or send: slots | schedule | name | q1 | q2 | q3 | delete | back',
       buildMonthlyEditKeyboard()
     );
     return;

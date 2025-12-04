@@ -138,9 +138,13 @@ export async function handleEditDailyFlow(
   const input = messageText.trim().toLowerCase();
 
   if (pendingAction.step === 'menu') {
-    if (input === 'cancel' || input === DAILY_EDIT_ACTION_BUTTONS.cancel.toLowerCase()) {
+    if (input === 'back' || input === DAILY_EDIT_ACTION_BUTTONS.back.toLowerCase()) {
       pendingActions.delete(ctx.from!.id);
-      await ctx.reply('Edit cancelled.', buildDailyKeyboard());
+      const blocks = await QuestionBlockModel.find({ userId, type: 'DAILY' })
+        .sort({ createdAt: 1 })
+        .lean()
+        .exec();
+      await ctx.reply('Back.', buildDailyKeyboard(blocks));
       return;
     }
     if (input === 'delete' || input === DAILY_EDIT_ACTION_BUTTONS.delete.toLowerCase()) {
@@ -179,7 +183,7 @@ export async function handleEditDailyFlow(
       return;
     }
     await ctx.reply(
-      'Unknown action. Use buttons or send: slot | name | q1 | q2 | q3 | delete | cancel',
+      'Unknown action. Use buttons or send: slot | name | q1 | q2 | q3 | delete | back',
       buildDailyEditKeyboard()
     );
     return;

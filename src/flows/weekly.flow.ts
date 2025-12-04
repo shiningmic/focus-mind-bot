@@ -134,9 +134,13 @@ export async function handleEditWeeklyFlow(
   const input = messageText.trim().toLowerCase();
 
   if (pendingAction.step === 'menu') {
-    if (input === 'cancel' || input === WEEKLY_EDIT_ACTION_BUTTONS.cancel.toLowerCase()) {
+    if (input === 'back' || input === WEEKLY_EDIT_ACTION_BUTTONS.back.toLowerCase()) {
       pendingActions.delete(ctx.from!.id);
-      await ctx.reply('Edit cancelled.', buildWeeklyKeyboard());
+      const blocks = await QuestionBlockModel.find({ userId, type: 'WEEKLY' })
+        .sort({ createdAt: 1 })
+        .lean()
+        .exec();
+      await ctx.reply('Back.', buildWeeklyKeyboard(blocks));
       return;
     }
     if (input === 'delete' || input === WEEKLY_EDIT_ACTION_BUTTONS.delete.toLowerCase()) {
@@ -180,7 +184,7 @@ export async function handleEditWeeklyFlow(
       return;
     }
     await ctx.reply(
-      'Unknown action. Use buttons or send: slots | days | name | q1 | q2 | q3 | delete | cancel',
+      'Unknown action. Use buttons or send: slots | days | name | q1 | q2 | q3 | delete | back',
       buildWeeklyEditKeyboard()
     );
     return;

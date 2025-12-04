@@ -4,17 +4,22 @@ import { QuestionBlockModel } from '../models/questionBlock.model.js';
 import { UserModel } from '../models/user.model.js';
 import { pendingActions } from '../state/pending.js';
 import {
+  pushKeyboard,
+  popKeyboard,
+  resetNavigation,
+} from '../state/navigation.js';
+import {
   ADD_DAILY_BUTTON,
   ADD_MONTHLY_BUTTON,
   ADD_WEEKLY_BUTTON,
+  BACK_BUTTON_LABEL,
+  buildStartKeyboard,
   HELP_BUTTON_LABEL,
   QUICK_ACTION_LABELS,
   SETTINGS_BUTTON_LABEL,
   SETTINGS_BUTTON_LABELS,
-  BACK_BUTTON_LABEL,
-  CANCEL_BUTTON_LABEL,
   buildDailyKeyboard,
-  buildMainKeyboard,
+  buildBackKeyboard,
   buildMonthlyKeyboard,
   buildWeeklyKeyboard,
 } from '../ui/keyboards.js';
@@ -70,6 +75,24 @@ export function registerTextHandler(bot: Telegraf): void {
         return;
       }
 
+      const originalReply = ctx.reply.bind(ctx) as (...args: any[]) => any;
+      (ctx as any).reply = (...args: any[]) => {
+        const options = args.find(
+          (a) => a && typeof a === 'object' && !Array.isArray(a)
+        ) as any;
+        if (!options?.skipNavPush) {
+          const kb =
+            extractKeyboard(args[1]) ?? extractKeyboard(args[2]) ?? null;
+          if (kb && from?.id) {
+            pushKeyboard(from.id, kb);
+          }
+        }
+        if (options?.skipNavPush) {
+          delete options.skipNavPush;
+        }
+        return originalReply(...args);
+      };
+
       const messageText =
         (ctx.message as { text?: string } | undefined)?.text?.trim() ?? '';
       const pendingAction = pendingActions.get(from.id);
@@ -77,16 +100,6 @@ export function registerTextHandler(bot: Telegraf): void {
       if (isBackMessage(messageText)) {
         const handled = await handleBackNavigation(ctx, pendingAction);
         if (handled) return;
-      }
-
-      if (isCancelMessage(messageText)) {
-        if (pendingAction) {
-          pendingActions.delete(from.id);
-          await ctx.reply('Cancelled.', buildMainKeyboard());
-        } else {
-          await ctx.reply('No active action to cancel.', buildMainKeyboard());
-        }
-        return;
       }
 
       // Quick help
@@ -150,13 +163,12 @@ export function registerTextHandler(bot: Telegraf): void {
       }
 
       // Handle pending multi-step flows FIRST (before block selection)
-      // This ensures edit action buttons are processed correctly
       if (pendingAction?.type === 'slot') {
         const parsed = parseSlotInput(messageText);
         if (!parsed) {
           await ctx.reply(
             'Could not parse time. Use HH:MM or HH:MM-HH:MM formats.',
-            buildMainKeyboard()
+            { ...buildBackKeyboard(), skipNavPush: true } as any
           );
           return;
         }
@@ -174,7 +186,7 @@ export function registerTextHandler(bot: Telegraf): void {
           updated
             ? `Saved. ${formatSlotSummary(updated)}.`
             : 'Saved, but slot not found. Please re-open /slots.',
-          buildMainKeyboard()
+          { ...buildBackKeyboard(), skipNavPush: true } as any
         );
         return;
       }
@@ -184,7 +196,7 @@ export function registerTextHandler(bot: Telegraf): void {
         if (!isValidTimezone(tz)) {
           await ctx.reply(
             'Unknown timezone. Please provide a valid IANA timezone like Europe/Kyiv or America/New_York.',
-            buildMainKeyboard()
+            { ...buildBackKeyboard(), skipNavPush: true } as any
           );
           return;
         }
@@ -195,7 +207,7 @@ export function registerTextHandler(bot: Telegraf): void {
 
         await ctx.reply(
           `Timezone updated to ${user.timezone}.`,
-          buildMainKeyboard()
+          { ...buildBackKeyboard(), skipNavPush: true } as any
         );
         return;
       }
@@ -284,11 +296,6 @@ export function registerTextHandler(bot: Telegraf): void {
   });
 }
 
-function isCancelMessage(text: string): boolean {
-  const lower = text.toLowerCase();
-  return text === CANCEL_BUTTON_LABEL || lower === '/cancel' || lower === 'cancel';
-}
-
 function isBackMessage(text: string): boolean {
   const lower = text.toLowerCase();
   return text === BACK_BUTTON_LABEL || lower === '/back' || lower === 'back';
@@ -316,14 +323,15 @@ async function startSlotChangeFlow(
   user: { telegramId: number },
   slot: SlotCode
 ): Promise<void> {
+  // Remember where we came from so Back can return there
+  pushKeyboard(user.telegramId, buildBackKeyboard());
   pendingActions.set(user.telegramId, { type: 'slot', slot });
   const label = getSlotLabel(slot);
   await ctx.reply(
     `What time do you want to set for ${label}? Send either:\n` +
       `- Fixed time: HH:MM (e.g. 08:30)\n` +
-      `- Random window: HH:MM-HH:MM (e.g. 13:00-15:00)\n\n` +
-      'Tap Cancel to stop editing.',
-    buildMainKeyboard()
+      `- Random window: HH:MM-HH:MM (e.g. 13:00-15:00)`,
+    { ...buildBackKeyboard(), skipNavPush: true } as any
   );
 }
 
@@ -331,10 +339,12 @@ async function startTimezoneChangeFlow(
   ctx: Context,
   user: { telegramId: number }
 ): Promise<void> {
+  // Remember where we came from so Back can return there
+  pushKeyboard(user.telegramId, buildBackKeyboard());
   pendingActions.set(user.telegramId, { type: 'timezone' });
   await ctx.reply(
-    'Send a timezone in IANA format, e.g. Europe/Kyiv or America/New_York. Tap Cancel to stop.',
-    buildMainKeyboard()
+    'Send a timezone in IANA format, e.g. Europe/Kyiv or America/New_York.',
+    { ...buildBackKeyboard(), skipNavPush: true } as any
   );
 }
 
@@ -345,35 +355,66 @@ async function handleBackNavigation(
   const fromId = ctx.from?.id;
   if (!fromId) return false;
 
-  const goToSettings = async () => {
-    const { sendSettings } = await import('../commands/settings.command.js');
-    await sendSettings(ctx);
-  };
-
-  if (pendingAction?.type === 'editDaily' || pendingAction?.type === 'createDaily') {
+  if (
+    pendingAction?.type === 'editDaily' ||
+    pendingAction?.type === 'createDaily'
+  ) {
     pendingActions.delete(fromId);
+    resetNavigation(fromId);
     await handleBlocksList(ctx, 'DAILY');
     return true;
   }
 
-  if (pendingAction?.type === 'editWeekly' || pendingAction?.type === 'createWeekly') {
+  if (
+    pendingAction?.type === 'editWeekly' ||
+    pendingAction?.type === 'createWeekly'
+  ) {
     pendingActions.delete(fromId);
+    resetNavigation(fromId);
     await handleBlocksList(ctx, 'WEEKLY');
     return true;
   }
 
-  if (pendingAction?.type === 'editMonthly' || pendingAction?.type === 'createMonthly') {
+  if (
+    pendingAction?.type === 'editMonthly' ||
+    pendingAction?.type === 'createMonthly'
+  ) {
     pendingActions.delete(fromId);
+    resetNavigation(fromId);
     await handleBlocksList(ctx, 'MONTHLY');
     return true;
   }
 
   if (pendingAction?.type === 'slot' || pendingAction?.type === 'timezone') {
     pendingActions.delete(fromId);
-    await goToSettings();
+    const prevKb = popKeyboard(fromId);
+    resetNavigation(fromId);
+    if (prevKb) {
+      await ctx.reply('Back.', { ...prevKb, skipNavPush: true } as any);
+    } else {
+      await ctx.reply('Back to start.', {
+        ...buildStartKeyboard(),
+        skipNavPush: true,
+      } as any);
+    }
     return true;
   }
 
-  await goToSettings();
+  const prevKb = popKeyboard(fromId);
+  pendingActions.delete(fromId);
+  resetNavigation(fromId);
+  if (prevKb) {
+    await ctx.reply('Back.', { ...prevKb, skipNavPush: true } as any);
+  } else {
+    const startKb = buildStartKeyboard();
+    await ctx.reply('Back to start.', { ...startKb, skipNavPush: true } as any);
+  }
   return true;
+}
+
+function extractKeyboard(opt: any): any | null {
+  if (!opt) return null;
+  if (opt?.reply_markup?.keyboard) return opt;
+  if (opt?.keyboard) return opt;
+  return null;
 }

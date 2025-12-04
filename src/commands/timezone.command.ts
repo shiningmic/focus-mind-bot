@@ -1,6 +1,6 @@
 import type { Context, Telegraf } from 'telegraf';
 
-import { buildMainKeyboard } from '../ui/keyboards.js';
+import { buildBackKeyboard } from '../ui/keyboards.js';
 import { isValidTimezone } from '../utils/time.js';
 import { UserModel } from '../models/user.model.js';
 import { DEFAULT_TIMEZONE } from '../config/constants.js';
@@ -29,7 +29,9 @@ export function registerTimezoneCommand(bot: Telegraf): void {
 
     const from = ctx.from;
     if (!from) {
-      await ctx.reply('Unable to read your Telegram profile. Please try again.');
+      await ctx.reply(
+        'Unable to read your Telegram profile. Please try again.'
+      );
       return;
     }
 
@@ -46,7 +48,7 @@ export function registerTimezoneCommand(bot: Telegraf): void {
 
     await ctx.reply(
       `Timezone updated to ${user.timezone}.`,
-      buildMainKeyboard()
+      buildBackKeyboard()
     );
   });
 }

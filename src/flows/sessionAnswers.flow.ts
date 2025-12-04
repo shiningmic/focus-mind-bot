@@ -3,7 +3,7 @@ import mongoose from 'mongoose';
 
 import { SessionModel } from '../models/session.model.js';
 import { UserModel } from '../models/user.model.js';
-import { buildMainKeyboard } from '../ui/keyboards.js';
+import { buildBackKeyboard } from '../ui/keyboards.js';
 import {
   buildQuestionPrompt,
   buildSessionCompletionSummary,
@@ -38,7 +38,7 @@ export async function handleSessionAnswer(
   if (!session) {
     await ctx.reply(
       'No active reflection session. Use /reflect to start one.',
-      buildMainKeyboard()
+      buildBackKeyboard()
     );
     return;
   }
