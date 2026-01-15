@@ -65,7 +65,17 @@ export async function handleBlocksList(
     return 'EVENING';
   };
 
-  for (const block of blocks) {
+  const slotOrder: SlotCode[] = ['MORNING', 'DAY', 'EVENING'];
+  const sortedBlocks = [...blocks].sort((a, b) => {
+    const aSlot = pickPrimarySlot(a.slots);
+    const bSlot = pickPrimarySlot(b.slots);
+    const aIdx = slotOrder.indexOf(aSlot);
+    const bIdx = slotOrder.indexOf(bSlot);
+    if (aIdx !== bIdx) return aIdx - bIdx;
+    return a.name.localeCompare(b.name);
+  });
+
+  for (const block of sortedBlocks) {
     lines.push('');
     lines.push(`[${block.name}]`);
     lines.push(`Slots: ${formatSlotsForBlock(block.slots)}`);
@@ -108,11 +118,11 @@ export async function handleBlocksList(
 
   const keyboard =
     type === 'DAILY'
-      ? buildDailyKeyboard(blocks)
+      ? buildDailyKeyboard(sortedBlocks)
       : type === 'WEEKLY'
-      ? buildWeeklyKeyboard(blocks)
+      ? buildWeeklyKeyboard(sortedBlocks)
       : type === 'MONTHLY'
-      ? buildMonthlyKeyboard(blocks)
+      ? buildMonthlyKeyboard(sortedBlocks)
       : buildSettingsKeyboard();
   await ctx.reply(lines.join('\n'), keyboard);
 }

@@ -8,11 +8,28 @@ import {
   MONTHLY_EDIT_ACTION_BUTTONS,
   CLEAR_QUESTION_BUTTON_LABEL,
   buildMonthlyEditKeyboard,
+  buildMonthlyCreateKeyboard,
   buildMonthlyKeyboard,
 } from '../ui/keyboards.js';
 import { resetNavigation } from '../state/navigation.js';
 import { parseSlotsFlag } from '../utils/slots.js';
 import type { MonthSchedule } from '../types/core.js';
+
+function sortMonthlyBlocks(blocks: Array<{ slots: any; name: string }>) {
+  const order: Array<'morning' | 'day' | 'evening'> = [
+    'morning',
+    'day',
+    'evening',
+  ];
+  return [...blocks].sort((a, b) => {
+    const aIdxRaw = order.findIndex((s) => a.slots?.[s]);
+    const bIdxRaw = order.findIndex((s) => b.slots?.[s]);
+    const aIdx = aIdxRaw === -1 ? order.length : aIdxRaw;
+    const bIdx = bIdxRaw === -1 ? order.length : bIdxRaw;
+    if (aIdx !== bIdx) return aIdx - bIdx;
+    return a.name.localeCompare(b.name);
+  });
+}
 
 function parseMonthScheduleInput(raw: string): MonthSchedule | null {
   const trimmed = raw.trim().toLowerCase();
@@ -67,7 +84,11 @@ export async function startMonthlyEditFlow(
 
   const targetName = blockName.replace(/^[^\p{L}\p{N}]+/u, '').trim().toLowerCase();
   const block = sorted.find(
-    (b) => b.name.trim().toLowerCase() === targetName
+    (b) =>
+      b.name
+        .replace(/^[^\p{L}\p{N}]+/u, '')
+        .trim()
+        .toLowerCase() === targetName
   );
 
   if (!block) {
@@ -122,7 +143,10 @@ export async function startMonthlyCreateFlow(ctx: Context): Promise<void> {
     temp: {},
   });
 
-  await ctx.reply('Enter a name for the new monthly set:', buildMonthlyEditKeyboard());
+  await ctx.reply(
+    'Enter a name for the new monthly set:',
+    buildMonthlyCreateKeyboard()
+  );
 }
 
 export async function handleEditMonthlyFlow(
@@ -155,7 +179,7 @@ export async function handleEditMonthlyFlow(
         .sort({ createdAt: 1 })
         .lean()
         .exec();
-      await ctx.reply('Back.', buildMonthlyKeyboard(blocks));
+      await ctx.reply('Back.', buildMonthlyKeyboard(sortMonthlyBlocks(blocks)));
       return;
     }
     if (input === 'delete' || input === MONTHLY_EDIT_ACTION_BUTTONS.delete.toLowerCase()) {
@@ -166,7 +190,10 @@ export async function handleEditMonthlyFlow(
         .sort({ createdAt: 1 })
         .lean()
         .exec();
-      await ctx.reply('Deleted monthly set.', buildMonthlyKeyboard(blocks));
+      await ctx.reply(
+        'Deleted monthly set.',
+        buildMonthlyKeyboard(sortMonthlyBlocks(blocks))
+      );
       return;
     }
     if (input === 'slots' || input === MONTHLY_EDIT_ACTION_BUTTONS.slots.toLowerCase()) {
@@ -329,6 +356,24 @@ export async function handleCreateMonthlyFlow(
   const maxBlocks = 3;
   let state = { ...(pendingAction.temp || {}) };
   const step = pendingAction.step;
+  const input = messageText.trim().toLowerCase();
+
+  if (
+    input === 'delete' ||
+    input === MONTHLY_EDIT_ACTION_BUTTONS.delete.toLowerCase()
+  ) {
+    pendingActions.delete(ctx.from!.id);
+    resetNavigation(ctx.from!.id);
+    const blocks = await QuestionBlockModel.find({ userId, type: 'MONTHLY' })
+      .sort({ createdAt: 1 })
+      .lean()
+      .exec();
+    await ctx.reply(
+      'Creation cancelled.',
+      buildMonthlyKeyboard(sortMonthlyBlocks(blocks))
+    );
+    return;
+  }
 
   if (step === 'name') {
     const existingCount = await QuestionBlockModel.countDocuments({
@@ -346,7 +391,7 @@ export async function handleCreateMonthlyFlow(
 
     const name = messageText.trim();
     if (!name) {
-      await ctx.reply('Name cannot be empty.', buildMonthlyEditKeyboard());
+      await ctx.reply('Name cannot be empty.', buildMonthlyCreateKeyboard());
       return;
     }
     pendingActions.set(ctx.from!.id, {
@@ -354,14 +399,20 @@ export async function handleCreateMonthlyFlow(
       step: 'slots',
       temp: { ...state, name },
     });
-    await ctx.reply('Send slots: morning, day, evening (comma-separated). At least one required.', buildMonthlyEditKeyboard());
+    await ctx.reply(
+      'Send slots: morning, day, evening (comma-separated). At least one required.',
+      buildMonthlyCreateKeyboard()
+    );
     return;
   }
 
   if (step === 'slots') {
     const slots = parseSlotsFlag(messageText);
     if (!slots) {
-      await ctx.reply('Invalid slots. Use morning, day, evening separated by commas.', buildMonthlyEditKeyboard());
+      await ctx.reply(
+        'Invalid slots. Use morning, day, evening separated by commas.',
+        buildMonthlyCreateKeyboard()
+      );
       return;
     }
     pendingActions.set(ctx.from!.id, {
@@ -369,14 +420,20 @@ export async function handleCreateMonthlyFlow(
       step: 'schedule',
       temp: { ...state, slots },
     });
-    await ctx.reply('Send schedule: first | last | day:10', buildMonthlyEditKeyboard());
+    await ctx.reply(
+      'Send schedule: first | last | day:10',
+      buildMonthlyCreateKeyboard()
+    );
     return;
   }
 
   if (step === 'schedule') {
     const schedule = parseMonthScheduleInput(messageText);
     if (!schedule) {
-      await ctx.reply('Schedule must be: first | last | day:N (1-28).', buildMonthlyEditKeyboard());
+      await ctx.reply(
+        'Schedule must be: first | last | day:N (1-28).',
+        buildMonthlyCreateKeyboard()
+      );
       return;
     }
     pendingActions.set(ctx.from!.id, {
@@ -384,14 +441,14 @@ export async function handleCreateMonthlyFlow(
       step: 'q1',
       temp: { ...state, schedule },
     });
-    await ctx.reply('Question 1:', buildMonthlyEditKeyboard());
+    await ctx.reply('Question 1:', buildMonthlyCreateKeyboard());
     return;
   }
 
   const pushQuestion = (key: 'q1' | 'q2' | 'q3', nextStep: string | null) => {
     const text = messageText.trim();
     if (!text) {
-      void ctx.reply('Question text cannot be empty.', buildMonthlyEditKeyboard());
+      void ctx.reply('Question text cannot be empty.', buildMonthlyCreateKeyboard());
       return null;
     }
     const nextTemp = { ...state, [key]: text };
@@ -405,7 +462,7 @@ export async function handleCreateMonthlyFlow(
         nextStep === 'q2'
           ? 'Question 2 (or type "skip" to finish with one question):'
           : 'Question 3 (or type "skip" to finish):';
-      void ctx.reply(label, buildMonthlyEditKeyboard());
+      void ctx.reply(label, buildMonthlyCreateKeyboard());
       return true;
     }
     return nextTemp;
@@ -433,7 +490,7 @@ export async function handleCreateMonthlyFlow(
     if (messageText.trim().toLowerCase() !== 'skip') {
       const text = messageText.trim();
       if (!text) {
-        await ctx.reply('Question text cannot be empty.', buildMonthlyEditKeyboard());
+        await ctx.reply('Question text cannot be empty.', buildMonthlyCreateKeyboard());
         return;
       }
       state = { ...state, q3: text };
@@ -447,7 +504,7 @@ export async function handleCreateMonthlyFlow(
     return;
   }
   if (!questions.length) {
-    await ctx.reply('At least one question is required.', buildMonthlyEditKeyboard());
+    await ctx.reply('At least one question is required.', buildMonthlyCreateKeyboard());
     return;
   }
 
@@ -471,6 +528,6 @@ export async function handleCreateMonthlyFlow(
     .exec();
   await ctx.reply(
     `Monthly set "${state.name}" created.`,
-    buildMonthlyKeyboard(blocks)
+    buildMonthlyKeyboard(sortMonthlyBlocks(blocks))
   );
 }

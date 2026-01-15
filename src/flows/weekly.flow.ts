@@ -8,10 +8,27 @@ import {
   WEEKLY_EDIT_ACTION_BUTTONS,
   CLEAR_QUESTION_BUTTON_LABEL,
   buildWeeklyEditKeyboard,
+  buildWeeklyCreateKeyboard,
   buildWeeklyKeyboard,
 } from '../ui/keyboards.js';
 import { resetNavigation } from '../state/navigation.js';
 import { parseSlotsFlag } from '../utils/slots.js';
+
+function sortWeeklyBlocks(blocks: Array<{ slots: any; name: string }>) {
+  const order: Array<'morning' | 'day' | 'evening'> = [
+    'morning',
+    'day',
+    'evening',
+  ];
+  return [...blocks].sort((a, b) => {
+    const aIdxRaw = order.findIndex((s) => a.slots?.[s]);
+    const bIdxRaw = order.findIndex((s) => b.slots?.[s]);
+    const aIdx = aIdxRaw === -1 ? order.length : aIdxRaw;
+    const bIdx = bIdxRaw === -1 ? order.length : bIdxRaw;
+    if (aIdx !== bIdx) return aIdx - bIdx;
+    return a.name.localeCompare(b.name);
+  });
+}
 
 export async function startWeeklyEditFlow(
   ctx: Context,
@@ -54,7 +71,11 @@ export async function startWeeklyEditFlow(
 
   const targetName = blockName.replace(/^[^\p{L}\p{N}]+/u, '').trim().toLowerCase();
   const block = sorted.find(
-    (b) => b.name.trim().toLowerCase() === targetName
+    (b) =>
+      b.name
+        .replace(/^[^\p{L}\p{N}]+/u, '')
+        .trim()
+        .toLowerCase() === targetName
   );
 
   if (!block) {
@@ -109,7 +130,10 @@ export async function startWeeklyCreateFlow(ctx: Context): Promise<void> {
     temp: {},
   });
 
-  await ctx.reply('Enter a name for the new weekly set:', buildWeeklyEditKeyboard());
+  await ctx.reply(
+    'Enter a name for the new weekly set:',
+    buildWeeklyCreateKeyboard()
+  );
 }
 
 export async function handleEditWeeklyFlow(
@@ -142,7 +166,7 @@ export async function handleEditWeeklyFlow(
         .sort({ createdAt: 1 })
         .lean()
         .exec();
-      await ctx.reply('Back.', buildWeeklyKeyboard(blocks));
+      await ctx.reply('Back.', buildWeeklyKeyboard(sortWeeklyBlocks(blocks)));
       return;
     }
     if (input === 'delete' || input === WEEKLY_EDIT_ACTION_BUTTONS.delete.toLowerCase()) {
@@ -153,7 +177,10 @@ export async function handleEditWeeklyFlow(
         .sort({ createdAt: 1 })
         .lean()
         .exec();
-      await ctx.reply('Deleted weekly set.', buildWeeklyKeyboard(blocks));
+      await ctx.reply(
+        'Deleted weekly set.',
+        buildWeeklyKeyboard(sortWeeklyBlocks(blocks))
+      );
       return;
     }
     if (input === 'slots' || input === WEEKLY_EDIT_ACTION_BUTTONS.slots.toLowerCase()) {
@@ -308,6 +335,24 @@ export async function handleCreateWeeklyFlow(
   const maxBlocks = 3;
   let state = { ...(pendingAction.temp || {}) };
   const step = pendingAction.step;
+  const input = messageText.trim().toLowerCase();
+
+  if (
+    input === 'delete' ||
+    input === WEEKLY_EDIT_ACTION_BUTTONS.delete.toLowerCase()
+  ) {
+    pendingActions.delete(ctx.from!.id);
+    resetNavigation(ctx.from!.id);
+    const blocks = await QuestionBlockModel.find({ userId, type: 'WEEKLY' })
+      .sort({ createdAt: 1 })
+      .lean()
+      .exec();
+    await ctx.reply(
+      'Creation cancelled.',
+      buildWeeklyKeyboard(sortWeeklyBlocks(blocks))
+    );
+    return;
+  }
 
   if (step === 'name') {
     const existingCount = await QuestionBlockModel.countDocuments({
@@ -325,7 +370,7 @@ export async function handleCreateWeeklyFlow(
 
     const name = messageText.trim();
     if (!name) {
-      await ctx.reply('Name cannot be empty.', buildWeeklyEditKeyboard());
+      await ctx.reply('Name cannot be empty.', buildWeeklyCreateKeyboard());
       return;
     }
     pendingActions.set(ctx.from!.id, {
@@ -333,14 +378,20 @@ export async function handleCreateWeeklyFlow(
       step: 'slots',
       temp: { ...state, name },
     });
-    await ctx.reply('Send slots: morning, day, evening (comma-separated). At least one required.', buildWeeklyEditKeyboard());
+    await ctx.reply(
+      'Send slots: morning, day, evening (comma-separated). At least one required.',
+      buildWeeklyCreateKeyboard()
+    );
     return;
   }
 
   if (step === 'slots') {
     const slots = parseSlotsFlag(messageText);
     if (!slots) {
-      await ctx.reply('Invalid slots. Use morning, day, evening separated by commas.', buildWeeklyEditKeyboard());
+      await ctx.reply(
+        'Invalid slots. Use morning, day, evening separated by commas.',
+        buildWeeklyCreateKeyboard()
+      );
       return;
     }
     pendingActions.set(ctx.from!.id, {
@@ -348,7 +399,10 @@ export async function handleCreateWeeklyFlow(
       step: 'days',
       temp: { ...state, slots },
     });
-    await ctx.reply('Send days of week as numbers 1-7, comma-separated.', buildWeeklyEditKeyboard());
+    await ctx.reply(
+      'Send days of week as numbers 1-7, comma-separated.',
+      buildWeeklyCreateKeyboard()
+    );
     return;
   }
 
@@ -358,7 +412,10 @@ export async function handleCreateWeeklyFlow(
       .map((d) => Number.parseInt(d.trim(), 10))
       .filter((n) => Number.isInteger(n) && n >= 1 && n <= 7);
     if (!parsed.length) {
-      await ctx.reply('Provide days 1-7 separated by commas.', buildWeeklyEditKeyboard());
+      await ctx.reply(
+        'Provide days 1-7 separated by commas.',
+        buildWeeklyCreateKeyboard()
+      );
       return;
     }
     pendingActions.set(ctx.from!.id, {
@@ -366,14 +423,14 @@ export async function handleCreateWeeklyFlow(
       step: 'q1',
       temp: { ...state, days: parsed },
     });
-    await ctx.reply('Question 1:', buildWeeklyEditKeyboard());
+    await ctx.reply('Question 1:', buildWeeklyCreateKeyboard());
     return;
   }
 
   const pushQuestion = (key: 'q1' | 'q2' | 'q3', nextStep: string | null) => {
     const text = messageText.trim();
     if (!text) {
-      void ctx.reply('Question text cannot be empty.', buildWeeklyEditKeyboard());
+      void ctx.reply('Question text cannot be empty.', buildWeeklyCreateKeyboard());
       return null;
     }
     const nextTemp = { ...state, [key]: text };
@@ -387,7 +444,7 @@ export async function handleCreateWeeklyFlow(
         nextStep === 'q2'
           ? 'Question 2 (or type "skip" to finish with one question):'
           : 'Question 3 (or type "skip" to finish):';
-      void ctx.reply(label, buildWeeklyEditKeyboard());
+      void ctx.reply(label, buildWeeklyCreateKeyboard());
       return true;
     }
     return nextTemp;
@@ -415,7 +472,7 @@ export async function handleCreateWeeklyFlow(
     if (messageText.trim().toLowerCase() !== 'skip') {
       const text = messageText.trim();
       if (!text) {
-        await ctx.reply('Question text cannot be empty.', buildWeeklyEditKeyboard());
+        await ctx.reply('Question text cannot be empty.', buildWeeklyCreateKeyboard());
         return;
       }
       state = { ...state, q3: text };
@@ -429,7 +486,7 @@ export async function handleCreateWeeklyFlow(
     return;
   }
   if (!questions.length) {
-    await ctx.reply('At least one question is required.', buildWeeklyEditKeyboard());
+    await ctx.reply('At least one question is required.', buildWeeklyCreateKeyboard());
     return;
   }
 
@@ -453,6 +510,6 @@ export async function handleCreateWeeklyFlow(
     .exec();
   await ctx.reply(
     `Weekly set "${state.name}" created.`,
-    buildWeeklyKeyboard(blocks)
+    buildWeeklyKeyboard(sortWeeklyBlocks(blocks))
   );
 }

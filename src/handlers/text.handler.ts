@@ -269,9 +269,11 @@ export function registerTextHandler(bot: Telegraf): void {
       // Handle block selection buttons (prefixed with emoji)
       // Only process if no pending action (to avoid conflicts with edit buttons)
       if (!pendingAction) {
-        const match = /^[^\p{L}\p{N}]+(.+)$/u.exec(messageText);
-        if (match) {
-          const blockNameNormalized = match[1].trim().toLowerCase();
+        const blockNameNormalized = normalizeBlockName(messageText);
+        if (
+          blockNameNormalized &&
+          blockNameNormalized !== messageText.trim().toLowerCase()
+        ) {
 
           const findByNormalizedName = async (
             type: 'DAILY' | 'WEEKLY' | 'MONTHLY'
@@ -284,7 +286,7 @@ export function registerTextHandler(bot: Telegraf): void {
               .lean()
               .exec();
             return blocks.find(
-              (b) => (b.name ?? '').trim().toLowerCase() === blockNameNormalized
+              (b) => normalizeBlockName(b.name ?? '') === blockNameNormalized
             );
           };
 
@@ -454,4 +456,8 @@ function extractKeyboard(opt: any): any | null {
   if (opt?.reply_markup?.keyboard) return opt;
   if (opt?.keyboard) return opt;
   return null;
+}
+
+function normalizeBlockName(text: string): string {
+  return text.replace(/^[^\p{L}\p{N}]+/u, '').trim().toLowerCase();
 }

@@ -148,6 +148,13 @@ export function buildDailyEditKeyboard(includeClear = false) {
   return Markup.keyboard(rows).resize();
 }
 
+export function buildDailyCreateKeyboard() {
+  return Markup.keyboard([
+    [DAILY_EDIT_ACTION_BUTTONS.delete],
+    [BACK_BUTTON_LABEL],
+  ]).resize();
+}
+
 export function buildWeeklyKeyboard(
   blocks?: Array<{ name: string }>
 ): ReturnType<typeof Markup.keyboard> {
@@ -171,6 +178,13 @@ export function buildWeeklyEditKeyboard(includeClear = false) {
   if (includeClear) rows.push([CLEAR_QUESTION_BUTTON_LABEL]);
   rows.push([BACK_BUTTON_LABEL]);
   return Markup.keyboard(rows).resize();
+}
+
+export function buildWeeklyCreateKeyboard() {
+  return Markup.keyboard([
+    [WEEKLY_EDIT_ACTION_BUTTONS.delete],
+    [BACK_BUTTON_LABEL],
+  ]).resize();
 }
 
 export function buildMonthlyKeyboard(
@@ -199,5 +213,12 @@ export function buildMonthlyEditKeyboard(includeClear = false) {
   if (includeClear) rows.push([CLEAR_QUESTION_BUTTON_LABEL]);
   rows.push([BACK_BUTTON_LABEL]);
   return Markup.keyboard(rows).resize();
+}
+
+export function buildMonthlyCreateKeyboard() {
+  return Markup.keyboard([
+    [MONTHLY_EDIT_ACTION_BUTTONS.delete],
+    [BACK_BUTTON_LABEL],
+  ]).resize();
 }
 

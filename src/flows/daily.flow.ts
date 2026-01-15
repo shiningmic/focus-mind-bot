@@ -8,12 +8,29 @@ import {
   DAILY_EDIT_ACTION_BUTTONS,
   CLEAR_QUESTION_BUTTON_LABEL,
   buildDailyEditKeyboard,
+  buildDailyCreateKeyboard,
   buildDailyKeyboard,
 } from '../ui/keyboards.js';
 import { resetNavigation } from '../state/navigation.js';
 import { getSlotLabel } from '../utils/format.js';
 import { slotCodeFromString } from '../utils/time.js';
 import type { SlotCode } from '../types/core.js';
+
+function sortDailyBlocks(blocks: Array<{ slots: any; name: string }>) {
+  const order: Array<'morning' | 'day' | 'evening'> = [
+    'morning',
+    'day',
+    'evening',
+  ];
+  return [...blocks].sort((a, b) => {
+    const aIdxRaw = order.findIndex((s) => a.slots?.[s]);
+    const bIdxRaw = order.findIndex((s) => b.slots?.[s]);
+    const aIdx = aIdxRaw === -1 ? order.length : aIdxRaw;
+    const bIdx = bIdxRaw === -1 ? order.length : bIdxRaw;
+    if (aIdx !== bIdx) return aIdx - bIdx;
+    return a.name.localeCompare(b.name);
+  });
+}
 
 export async function startDailyEditFlow(
   ctx: Context,
@@ -56,7 +73,11 @@ export async function startDailyEditFlow(
 
   const targetName = blockName.replace(/^[^\p{L}\p{N}]+/u, '').trim().toLowerCase();
   const block = sorted.find(
-    (b) => b.name.trim().toLowerCase() === targetName
+    (b) =>
+      b.name
+        .replace(/^[^\p{L}\p{N}]+/u, '')
+        .trim()
+        .toLowerCase() === targetName
   );
   if (!block) {
     await ctx.reply('This daily set does not exist. Try another.');
@@ -112,7 +133,7 @@ export async function startDailyCreateFlow(ctx: Context): Promise<void> {
 
   await ctx.reply(
     'Enter a name for the new daily set:',
-    buildDailyEditKeyboard()
+    buildDailyCreateKeyboard()
   );
 }
 
@@ -146,7 +167,7 @@ export async function handleEditDailyFlow(
         .sort({ createdAt: 1 })
         .lean()
         .exec();
-      await ctx.reply('Back.', buildDailyKeyboard(blocks));
+      await ctx.reply('Back.', buildDailyKeyboard(sortDailyBlocks(blocks)));
       return;
     }
     if (input === 'delete' || input === DAILY_EDIT_ACTION_BUTTONS.delete.toLowerCase()) {
@@ -157,7 +178,10 @@ export async function handleEditDailyFlow(
         .sort({ createdAt: 1 })
         .lean()
         .exec();
-      await ctx.reply('Deleted daily set.', buildDailyKeyboard(blocks));
+      await ctx.reply(
+        'Deleted daily set.',
+        buildDailyKeyboard(sortDailyBlocks(blocks))
+      );
       return;
     }
     if (input === 'slot' || input === DAILY_EDIT_ACTION_BUTTONS.slot.toLowerCase()) {
@@ -297,6 +321,24 @@ export async function handleCreateDailyFlow(
   const maxBlocks = 3;
   let state = { ...(pendingAction.temp || {}) };
   const step = pendingAction.step;
+  const input = messageText.trim().toLowerCase();
+
+  if (
+    input === 'delete' ||
+    input === DAILY_EDIT_ACTION_BUTTONS.delete.toLowerCase()
+  ) {
+    pendingActions.delete(ctx.from!.id);
+    resetNavigation(ctx.from!.id);
+    const blocks = await QuestionBlockModel.find({ userId, type: 'DAILY' })
+      .sort({ createdAt: 1 })
+      .lean()
+      .exec();
+    await ctx.reply(
+      'Creation cancelled.',
+      buildDailyKeyboard(sortDailyBlocks(blocks))
+    );
+    return;
+  }
 
   if (step === 'name') {
     const existingCount = await QuestionBlockModel.countDocuments({
@@ -314,7 +356,7 @@ export async function handleCreateDailyFlow(
 
     const name = messageText.trim();
     if (!name) {
-      await ctx.reply('Name cannot be empty.', buildDailyEditKeyboard());
+      await ctx.reply('Name cannot be empty.', buildDailyCreateKeyboard());
       return;
     }
     pendingActions.set(ctx.from!.id, {
@@ -322,7 +364,10 @@ export async function handleCreateDailyFlow(
       step: 'slot',
       temp: { ...state, name },
     });
-    await ctx.reply('Choose slot: MORNING | DAY | EVENING', buildDailyEditKeyboard());
+    await ctx.reply(
+      'Choose slot: MORNING | DAY | EVENING',
+      buildDailyCreateKeyboard()
+    );
     return;
   }
 
@@ -331,7 +376,7 @@ export async function handleCreateDailyFlow(
     if (!slot) {
       await ctx.reply(
         'Unknown slot. Use MORNING, DAY, or EVENING.',
-        buildDailyEditKeyboard()
+        buildDailyCreateKeyboard()
       );
       return;
     }
@@ -340,14 +385,14 @@ export async function handleCreateDailyFlow(
       step: 'q1',
       temp: { ...state, slot },
     });
-    await ctx.reply('Question 1:', buildDailyEditKeyboard());
+    await ctx.reply('Question 1:', buildDailyCreateKeyboard());
     return;
   }
 
   const pushQuestion = (key: 'q1' | 'q2' | 'q3', nextStep: string | null) => {
     const text = messageText.trim();
     if (!text) {
-      void ctx.reply('Question text cannot be empty.', buildDailyEditKeyboard());
+      void ctx.reply('Question text cannot be empty.', buildDailyCreateKeyboard());
       return null;
     }
     const nextTemp = { ...state, [key]: text };
@@ -361,7 +406,7 @@ export async function handleCreateDailyFlow(
         nextStep === 'q2'
           ? 'Question 2 (or type "skip" to finish with one question):'
           : 'Question 3 (or type "skip" to finish):';
-      void ctx.reply(label, buildDailyEditKeyboard());
+      void ctx.reply(label, buildDailyCreateKeyboard());
       return true;
     }
     return nextTemp;
@@ -391,7 +436,7 @@ export async function handleCreateDailyFlow(
     if (messageText.trim().toLowerCase() !== 'skip') {
       const text = messageText.trim();
       if (!text) {
-        await ctx.reply('Question text cannot be empty.', buildDailyEditKeyboard());
+        await ctx.reply('Question text cannot be empty.', buildDailyCreateKeyboard());
         return;
       }
       state = { ...state, q3: text };
@@ -406,7 +451,7 @@ export async function handleCreateDailyFlow(
     return;
   }
   if (!questions.length) {
-    await ctx.reply('At least one question is required.', buildDailyEditKeyboard());
+    await ctx.reply('At least one question is required.', buildDailyCreateKeyboard());
     return;
   }
 
@@ -431,5 +476,8 @@ export async function handleCreateDailyFlow(
     .sort({ createdAt: 1 })
     .lean()
     .exec();
-  await ctx.reply(`Daily set "${state.name}" created.`, buildDailyKeyboard(blocks));
+  await ctx.reply(
+    `Daily set "${state.name}" created.`,
+    buildDailyKeyboard(sortDailyBlocks(blocks))
+  );
 }
