@@ -192,23 +192,24 @@ export function registerTextHandler(bot: Telegraf): void {
           return;
         }
 
-        user.slots = applySingleSlotUpdate(
-          user.slots as any,
-          pendingAction.slot,
-          parsed
-        );
-        await user.save();
-        pendingActions.delete(from.id);
+      user.slots = applySingleSlotUpdate(
+        user.slots as any,
+        pendingAction.slot,
+        parsed
+      );
+      await user.save();
+      pendingActions.delete(from.id);
 
-        const updated = user.slots.find((s) => s.slot === pendingAction.slot);
-        await ctx.reply(
-          updated
-            ? `Saved. ${formatSlotSummary(updated)}.`
-            : 'Saved, but slot not found. Please re-open /slots.',
-          { ...buildBackKeyboard(), skipNavPush: true } as any
-        );
-        return;
-      }
+      const updated = user.slots.find((s) => s.slot === pendingAction.slot);
+      await ctx.reply(
+        updated
+          ? `Saved. ${formatSlotSummary(updated)}.`
+          : 'Saved, but slot not found. Please re-open /slots.',
+        { ...buildBackKeyboard(), skipNavPush: true } as any
+      );
+      await handleSlotsCommand(ctx, '/slots');
+      return;
+    }
 
       if (pendingAction?.type === 'timezone') {
         const tz = messageText.trim();
@@ -220,16 +221,17 @@ export function registerTextHandler(bot: Telegraf): void {
           return;
         }
 
-        user.timezone = tz;
-        await user.save();
-        pendingActions.delete(from.id);
+      user.timezone = tz;
+      await user.save();
+      pendingActions.delete(from.id);
 
-        await ctx.reply(`Timezone updated to ${user.timezone}.`, {
-          ...buildBackKeyboard(),
-          skipNavPush: true,
-        } as any);
-        return;
-      }
+      await ctx.reply(`Timezone updated to ${user.timezone}.`, {
+        ...buildBackKeyboard(),
+        skipNavPush: true,
+      } as any);
+      await handleSlotsCommand(ctx, '/slots');
+      return;
+    }
 
       // Route to flow handlers
       if (pendingAction?.type === 'editDaily') {
@@ -437,10 +439,7 @@ async function handleBackNavigation(
   if (pendingAction?.type === 'slot' || pendingAction?.type === 'timezone') {
     pendingActions.delete(fromId);
     resetNavigation(fromId);
-    await ctx.reply('Back to start.', {
-      ...buildStartKeyboard(),
-      skipNavPush: true,
-    } as any);
+    await handleSlotsCommand(ctx, '/slots');
     return true;
   }
 
