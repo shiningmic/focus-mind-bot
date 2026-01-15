@@ -6,9 +6,11 @@ import { UserModel } from '../models/user.model.js';
 import { pendingActions } from '../state/pending.js';
 import {
   MONTHLY_EDIT_ACTION_BUTTONS,
+  CLEAR_QUESTION_BUTTON_LABEL,
   buildMonthlyEditKeyboard,
   buildMonthlyKeyboard,
 } from '../ui/keyboards.js';
+import { resetNavigation } from '../state/navigation.js';
 import { parseSlotsFlag } from '../utils/slots.js';
 import type { MonthSchedule } from '../types/core.js';
 
@@ -159,7 +161,12 @@ export async function handleEditMonthlyFlow(
     if (input === 'delete' || input === MONTHLY_EDIT_ACTION_BUTTONS.delete.toLowerCase()) {
       await QuestionBlockModel.deleteOne({ _id: block._id }).exec();
       pendingActions.delete(ctx.from!.id);
-      await ctx.reply('Deleted monthly set.', buildMonthlyKeyboard());
+      resetNavigation(ctx.from!.id);
+      const blocks = await QuestionBlockModel.find({ userId, type: 'MONTHLY' })
+        .sort({ createdAt: 1 })
+        .lean()
+        .exec();
+      await ctx.reply('Deleted monthly set.', buildMonthlyKeyboard(blocks));
       return;
     }
     if (input === 'slots' || input === MONTHLY_EDIT_ACTION_BUTTONS.slots.toLowerCase()) {
@@ -193,7 +200,10 @@ export async function handleEditMonthlyFlow(
         ...pendingAction,
         step: stepMap[input] || 'setQ1',
       });
-      await ctx.reply('Send new question text:', buildMonthlyEditKeyboard());
+      await ctx.reply(
+        'Send new question text, or type "skip" to clear this question.',
+        buildMonthlyEditKeyboard(true)
+      );
       return;
     }
     await ctx.reply(
@@ -214,14 +224,11 @@ export async function handleEditMonthlyFlow(
     }
     block.slots = slots;
     await block.save();
-    pendingActions.delete(ctx.from!.id);
-    
-    // Show updated block list
-    const blocks = await QuestionBlockModel.find({ userId, type: 'MONTHLY' })
-      .sort({ createdAt: 1 })
-      .lean()
-      .exec();
-    await ctx.reply('Slots updated.', buildMonthlyKeyboard(blocks));
+    pendingActions.set(ctx.from!.id, { ...pendingAction, step: 'menu' });
+    await ctx.reply(
+      'Slots updated. Choose next action:',
+      buildMonthlyEditKeyboard()
+    );
     return;
   }
 
@@ -236,14 +243,11 @@ export async function handleEditMonthlyFlow(
     }
     block.monthSchedule = parsed;
     await block.save();
-    pendingActions.delete(ctx.from!.id);
-    
-    // Show updated block list
-    const blocks = await QuestionBlockModel.find({ userId, type: 'MONTHLY' })
-      .sort({ createdAt: 1 })
-      .lean()
-      .exec();
-    await ctx.reply('Schedule updated.', buildMonthlyKeyboard(blocks));
+    pendingActions.set(ctx.from!.id, { ...pendingAction, step: 'menu' });
+    await ctx.reply(
+      'Schedule updated. Choose next action:',
+      buildMonthlyEditKeyboard()
+    );
     return;
   }
 
@@ -255,24 +259,44 @@ export async function handleEditMonthlyFlow(
     }
     block.name = name;
     await block.save();
-    pendingActions.delete(ctx.from!.id);
-    
-    // Show updated block list
-    const blocks = await QuestionBlockModel.find({ userId, type: 'MONTHLY' })
-      .sort({ createdAt: 1 })
-      .lean()
-      .exec();
-    await ctx.reply('Name updated.', buildMonthlyKeyboard(blocks));
+    pendingActions.set(ctx.from!.id, { ...pendingAction, step: 'menu' });
+    await ctx.reply(
+      'Name updated. Choose next action:',
+      buildMonthlyEditKeyboard()
+    );
     return;
   }
 
   const updateQuestion = async (index: number) => {
     const text = messageText.trim();
-    if (!text) {
-      await ctx.reply('Question text cannot be empty.', buildMonthlyEditKeyboard());
+    const normalized = text.toLowerCase();
+    const questions = [...block.questions];
+
+    if (
+      normalized === 'skip' ||
+      normalized === 'clear' ||
+      messageText === CLEAR_QUESTION_BUTTON_LABEL
+    ) {
+      block.questions = questions
+        .filter((q) => q.order !== index)
+        .sort((a, b) => a.order - b.order);
+      await block.save();
+      pendingActions.set(ctx.from!.id, { ...pendingAction, step: 'menu' });
+      await ctx.reply(
+        'Question cleared. Choose next action:',
+        buildMonthlyEditKeyboard()
+      );
       return;
     }
-    const questions = [...block.questions];
+
+    if (!text) {
+      await ctx.reply(
+        'Question text cannot be empty.',
+        buildMonthlyEditKeyboard(true)
+      );
+      return;
+    }
+
     const existing = questions.find((q) => q.order === index);
     if (existing) {
       existing.text = text;
@@ -281,14 +305,11 @@ export async function handleEditMonthlyFlow(
     }
     block.questions = questions.sort((a, b) => a.order - b.order);
     await block.save();
-    pendingActions.delete(ctx.from!.id);
-    
-    // Show updated block list
-    const blocks = await QuestionBlockModel.find({ userId, type: 'MONTHLY' })
-      .sort({ createdAt: 1 })
-      .lean()
-      .exec();
-    await ctx.reply('Question updated.', buildMonthlyKeyboard(blocks));
+    pendingActions.set(ctx.from!.id, { ...pendingAction, step: 'menu' });
+    await ctx.reply(
+      'Question updated. Choose next action:',
+      buildMonthlyEditKeyboard()
+    );
   };
 
   if (pendingAction.step === 'setQ1') return updateQuestion(0);
@@ -444,6 +465,12 @@ export async function handleCreateMonthlyFlow(
   });
 
   pendingActions.delete(ctx.from!.id);
-  await ctx.reply(`Monthly set "${state.name}" created.`, buildMonthlyKeyboard());
+  const blocks = await QuestionBlockModel.find({ userId, type: 'MONTHLY' })
+    .sort({ createdAt: 1 })
+    .lean()
+    .exec();
+  await ctx.reply(
+    `Monthly set "${state.name}" created.`,
+    buildMonthlyKeyboard(blocks)
+  );
 }
-

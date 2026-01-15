@@ -6,9 +6,11 @@ import { UserModel } from '../models/user.model.js';
 import { pendingActions } from '../state/pending.js';
 import {
   DAILY_EDIT_ACTION_BUTTONS,
+  CLEAR_QUESTION_BUTTON_LABEL,
   buildDailyEditKeyboard,
   buildDailyKeyboard,
 } from '../ui/keyboards.js';
+import { resetNavigation } from '../state/navigation.js';
 import { getSlotLabel } from '../utils/format.js';
 import { slotCodeFromString } from '../utils/time.js';
 import type { SlotCode } from '../types/core.js';
@@ -150,7 +152,12 @@ export async function handleEditDailyFlow(
     if (input === 'delete' || input === DAILY_EDIT_ACTION_BUTTONS.delete.toLowerCase()) {
       await QuestionBlockModel.deleteOne({ _id: block._id }).exec();
       pendingActions.delete(ctx.from!.id);
-      await ctx.reply('Deleted daily set.', buildDailyKeyboard());
+      resetNavigation(ctx.from!.id);
+      const blocks = await QuestionBlockModel.find({ userId, type: 'DAILY' })
+        .sort({ createdAt: 1 })
+        .lean()
+        .exec();
+      await ctx.reply('Deleted daily set.', buildDailyKeyboard(blocks));
       return;
     }
     if (input === 'slot' || input === DAILY_EDIT_ACTION_BUTTONS.slot.toLowerCase()) {
@@ -179,7 +186,10 @@ export async function handleEditDailyFlow(
         ...pendingAction,
         step: stepMap[input] || 'setQ1',
       });
-      await ctx.reply('Send new question text:', buildDailyEditKeyboard());
+      await ctx.reply(
+        'Send new question text, or type "skip" to clear this question.',
+        buildDailyEditKeyboard(true)
+      );
       return;
     }
     await ctx.reply(
@@ -204,14 +214,11 @@ export async function handleEditDailyFlow(
       evening: slot === 'EVENING',
     };
     await block.save();
-    pendingActions.delete(ctx.from!.id);
-    
-    // Show updated block list
-    const blocks = await QuestionBlockModel.find({ userId, type: 'DAILY' })
-      .sort({ createdAt: 1 })
-      .lean()
-      .exec();
-    await ctx.reply(`Slot updated to ${getSlotLabel(slot)}.`, buildDailyKeyboard(blocks));
+    pendingActions.set(ctx.from!.id, { ...pendingAction, step: 'menu' });
+    await ctx.reply(
+      `Slot updated to ${getSlotLabel(slot)}. Choose next action:`,
+      buildDailyEditKeyboard()
+    );
     return;
   }
 
@@ -223,27 +230,41 @@ export async function handleEditDailyFlow(
     }
     block.name = name;
     await block.save();
-    pendingActions.delete(ctx.from!.id);
-    
-    // Show updated block list
-    const blocks = await QuestionBlockModel.find({ userId, type: 'DAILY' })
-      .sort({ createdAt: 1 })
-      .lean()
-      .exec();
-    await ctx.reply('Name updated.', buildDailyKeyboard(blocks));
+    pendingActions.set(ctx.from!.id, { ...pendingAction, step: 'menu' });
+    await ctx.reply('Name updated. Choose next action:', buildDailyEditKeyboard());
     return;
   }
 
   const updateQuestion = async (index: number) => {
     const text = messageText.trim();
-    if (!text) {
+    const normalized = text.toLowerCase();
+    const questions = [...block.questions];
+
+    if (
+      normalized === 'skip' ||
+      normalized === 'clear' ||
+      messageText === CLEAR_QUESTION_BUTTON_LABEL
+    ) {
+      block.questions = questions
+        .filter((q) => q.order !== index)
+        .sort((a, b) => a.order - b.order);
+      await block.save();
+      pendingActions.set(ctx.from!.id, { ...pendingAction, step: 'menu' });
       await ctx.reply(
-        'Question text cannot be empty.',
+        'Question cleared. Choose next action:',
         buildDailyEditKeyboard()
       );
       return;
     }
-    const questions = [...block.questions];
+
+    if (!text) {
+      await ctx.reply(
+        'Question text cannot be empty.',
+        buildDailyEditKeyboard(true)
+      );
+      return;
+    }
+
     const existing = questions.find((q) => q.order === index);
     if (existing) {
       existing.text = text;
@@ -252,14 +273,11 @@ export async function handleEditDailyFlow(
     }
     block.questions = questions.sort((a, b) => a.order - b.order);
     await block.save();
-    pendingActions.delete(ctx.from!.id);
-    
-    // Show updated block list
-    const blocks = await QuestionBlockModel.find({ userId, type: 'DAILY' })
-      .sort({ createdAt: 1 })
-      .lean()
-      .exec();
-    await ctx.reply('Question updated.', buildDailyKeyboard(blocks));
+    pendingActions.set(ctx.from!.id, { ...pendingAction, step: 'menu' });
+    await ctx.reply(
+      'Question updated. Choose next action:',
+      buildDailyEditKeyboard()
+    );
   };
 
   if (pendingAction.step === 'setQ1') return updateQuestion(0);
@@ -409,6 +427,9 @@ export async function handleCreateDailyFlow(
   });
 
   pendingActions.delete(ctx.from!.id);
-  await ctx.reply(`Daily set "${state.name}" created.`, buildDailyKeyboard());
+  const blocks = await QuestionBlockModel.find({ userId, type: 'DAILY' })
+    .sort({ createdAt: 1 })
+    .lean()
+    .exec();
+  await ctx.reply(`Daily set "${state.name}" created.`, buildDailyKeyboard(blocks));
 }
-

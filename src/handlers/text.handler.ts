@@ -5,7 +5,6 @@ import { UserModel } from '../models/user.model.js';
 import { pendingActions } from '../state/pending.js';
 import {
   pushKeyboard,
-  popKeyboard,
   resetNavigation,
 } from '../state/navigation.js';
 import {
@@ -435,28 +434,18 @@ async function handleBackNavigation(
 
   if (pendingAction?.type === 'slot' || pendingAction?.type === 'timezone') {
     pendingActions.delete(fromId);
-    const prevKb = popKeyboard(fromId);
     resetNavigation(fromId);
-    if (prevKb) {
-      await ctx.reply('Back.', { ...prevKb, skipNavPush: true } as any);
-    } else {
-      await ctx.reply('Back to start.', {
-        ...buildStartKeyboard(),
-        skipNavPush: true,
-      } as any);
-    }
+    await ctx.reply('Back to start.', {
+      ...buildStartKeyboard(),
+      skipNavPush: true,
+    } as any);
     return true;
   }
 
-  const prevKb = popKeyboard(fromId);
   pendingActions.delete(fromId);
   resetNavigation(fromId);
-  if (prevKb) {
-    await ctx.reply('Back.', { ...prevKb, skipNavPush: true } as any);
-  } else {
-    const startKb = buildStartKeyboard();
-    await ctx.reply('Back to start.', { ...startKb, skipNavPush: true } as any);
-  }
+  const startKb = buildStartKeyboard();
+  await ctx.reply('Back to start.', { ...startKb, skipNavPush: true } as any);
   return true;
 }
 

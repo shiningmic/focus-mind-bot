@@ -6,9 +6,11 @@ import { UserModel } from '../models/user.model.js';
 import { pendingActions } from '../state/pending.js';
 import {
   WEEKLY_EDIT_ACTION_BUTTONS,
+  CLEAR_QUESTION_BUTTON_LABEL,
   buildWeeklyEditKeyboard,
   buildWeeklyKeyboard,
 } from '../ui/keyboards.js';
+import { resetNavigation } from '../state/navigation.js';
 import { parseSlotsFlag } from '../utils/slots.js';
 
 export async function startWeeklyEditFlow(
@@ -146,7 +148,12 @@ export async function handleEditWeeklyFlow(
     if (input === 'delete' || input === WEEKLY_EDIT_ACTION_BUTTONS.delete.toLowerCase()) {
       await QuestionBlockModel.deleteOne({ _id: block._id }).exec();
       pendingActions.delete(ctx.from!.id);
-      await ctx.reply('Deleted weekly set.', buildWeeklyKeyboard());
+      resetNavigation(ctx.from!.id);
+      const blocks = await QuestionBlockModel.find({ userId, type: 'WEEKLY' })
+        .sort({ createdAt: 1 })
+        .lean()
+        .exec();
+      await ctx.reply('Deleted weekly set.', buildWeeklyKeyboard(blocks));
       return;
     }
     if (input === 'slots' || input === WEEKLY_EDIT_ACTION_BUTTONS.slots.toLowerCase()) {
@@ -180,7 +187,10 @@ export async function handleEditWeeklyFlow(
         ...pendingAction,
         step: stepMap[input] || 'setQ1',
       });
-      await ctx.reply('Send new question text:', buildWeeklyEditKeyboard());
+      await ctx.reply(
+        'Send new question text, or type "skip" to clear this question.',
+        buildWeeklyEditKeyboard(true)
+      );
       return;
     }
     await ctx.reply(
@@ -201,14 +211,8 @@ export async function handleEditWeeklyFlow(
     }
     block.slots = slots;
     await block.save();
-    pendingActions.delete(ctx.from!.id);
-    
-    // Show updated block list
-    const blocks = await QuestionBlockModel.find({ userId, type: 'WEEKLY' })
-      .sort({ createdAt: 1 })
-      .lean()
-      .exec();
-    await ctx.reply('Slots updated.', buildWeeklyKeyboard(blocks));
+    pendingActions.set(ctx.from!.id, { ...pendingAction, step: 'menu' });
+    await ctx.reply('Slots updated. Choose next action:', buildWeeklyEditKeyboard());
     return;
   }
 
@@ -224,14 +228,8 @@ export async function handleEditWeeklyFlow(
     }
     block.daysOfWeek = parsed;
     await block.save();
-    pendingActions.delete(ctx.from!.id);
-    
-    // Show updated block list
-    const blocks = await QuestionBlockModel.find({ userId, type: 'WEEKLY' })
-      .sort({ createdAt: 1 })
-      .lean()
-      .exec();
-    await ctx.reply('Days updated.', buildWeeklyKeyboard(blocks));
+    pendingActions.set(ctx.from!.id, { ...pendingAction, step: 'menu' });
+    await ctx.reply('Days updated. Choose next action:', buildWeeklyEditKeyboard());
     return;
   }
 
@@ -243,24 +241,41 @@ export async function handleEditWeeklyFlow(
     }
     block.name = name;
     await block.save();
-    pendingActions.delete(ctx.from!.id);
-    
-    // Show updated block list
-    const blocks = await QuestionBlockModel.find({ userId, type: 'WEEKLY' })
-      .sort({ createdAt: 1 })
-      .lean()
-      .exec();
-    await ctx.reply('Name updated.', buildWeeklyKeyboard(blocks));
+    pendingActions.set(ctx.from!.id, { ...pendingAction, step: 'menu' });
+    await ctx.reply('Name updated. Choose next action:', buildWeeklyEditKeyboard());
     return;
   }
 
   const updateQuestion = async (index: number) => {
     const text = messageText.trim();
-    if (!text) {
-      await ctx.reply('Question text cannot be empty.', buildWeeklyEditKeyboard());
+    const normalized = text.toLowerCase();
+    const questions = [...block.questions];
+
+    if (
+      normalized === 'skip' ||
+      normalized === 'clear' ||
+      messageText === CLEAR_QUESTION_BUTTON_LABEL
+    ) {
+      block.questions = questions
+        .filter((q) => q.order !== index)
+        .sort((a, b) => a.order - b.order);
+      await block.save();
+      pendingActions.set(ctx.from!.id, { ...pendingAction, step: 'menu' });
+      await ctx.reply(
+        'Question cleared. Choose next action:',
+        buildWeeklyEditKeyboard()
+      );
       return;
     }
-    const questions = [...block.questions];
+
+    if (!text) {
+      await ctx.reply(
+        'Question text cannot be empty.',
+        buildWeeklyEditKeyboard(true)
+      );
+      return;
+    }
+
     const existing = questions.find((q) => q.order === index);
     if (existing) {
       existing.text = text;
@@ -269,14 +284,11 @@ export async function handleEditWeeklyFlow(
     }
     block.questions = questions.sort((a, b) => a.order - b.order);
     await block.save();
-    pendingActions.delete(ctx.from!.id);
-    
-    // Show updated block list
-    const blocks = await QuestionBlockModel.find({ userId, type: 'WEEKLY' })
-      .sort({ createdAt: 1 })
-      .lean()
-      .exec();
-    await ctx.reply('Question updated.', buildWeeklyKeyboard(blocks));
+    pendingActions.set(ctx.from!.id, { ...pendingAction, step: 'menu' });
+    await ctx.reply(
+      'Question updated. Choose next action:',
+      buildWeeklyEditKeyboard()
+    );
   };
 
   if (pendingAction.step === 'setQ1') return updateQuestion(0);
@@ -435,6 +447,12 @@ export async function handleCreateWeeklyFlow(
   });
 
   pendingActions.delete(ctx.from!.id);
-  await ctx.reply(`Weekly set "${state.name}" created.`, buildWeeklyKeyboard());
+  const blocks = await QuestionBlockModel.find({ userId, type: 'WEEKLY' })
+    .sort({ createdAt: 1 })
+    .lean()
+    .exec();
+  await ctx.reply(
+    `Weekly set "${state.name}" created.`,
+    buildWeeklyKeyboard(blocks)
+  );
 }
-

@@ -60,6 +60,8 @@ export const REMINDER_BUTTON_LABELS = {
   skipPrefix: '⏭️ Skip previous and start',
 } as const;
 
+export const CLEAR_QUESTION_BUTTON_LABEL = '? Skip question';
+
 function slotTitle(slot: SlotCode): string {
   switch (slot) {
     case 'MORNING':
@@ -135,13 +137,15 @@ export function buildDailyKeyboard(
   return Markup.keyboard(rows).resize();
 }
 
-export function buildDailyEditKeyboard() {
-  return Markup.keyboard([
+export function buildDailyEditKeyboard(includeClear = false) {
+  const rows = [
     [DAILY_EDIT_ACTION_BUTTONS.slot, DAILY_EDIT_ACTION_BUTTONS.name],
     [DAILY_EDIT_ACTION_BUTTONS.q1, DAILY_EDIT_ACTION_BUTTONS.q2],
     [DAILY_EDIT_ACTION_BUTTONS.q3, DAILY_EDIT_ACTION_BUTTONS.delete],
-    [BACK_BUTTON_LABEL],
-  ]).resize();
+  ] as string[][];
+  if (includeClear) rows.push([CLEAR_QUESTION_BUTTON_LABEL]);
+  rows.push([BACK_BUTTON_LABEL]);
+  return Markup.keyboard(rows).resize();
 }
 
 export function buildWeeklyKeyboard(
@@ -157,13 +161,16 @@ export function buildWeeklyKeyboard(
   return Markup.keyboard(rows).resize();
 }
 
-export function buildWeeklyEditKeyboard() {
-  return Markup.keyboard([
+export function buildWeeklyEditKeyboard(includeClear = false) {
+  const rows = [
     [WEEKLY_EDIT_ACTION_BUTTONS.slots, WEEKLY_EDIT_ACTION_BUTTONS.days],
     [WEEKLY_EDIT_ACTION_BUTTONS.name, WEEKLY_EDIT_ACTION_BUTTONS.q1],
     [WEEKLY_EDIT_ACTION_BUTTONS.q2, WEEKLY_EDIT_ACTION_BUTTONS.q3],
-    [WEEKLY_EDIT_ACTION_BUTTONS.delete, BACK_BUTTON_LABEL],
-  ]).resize();
+    [WEEKLY_EDIT_ACTION_BUTTONS.delete],
+  ] as string[][];
+  if (includeClear) rows.push([CLEAR_QUESTION_BUTTON_LABEL]);
+  rows.push([BACK_BUTTON_LABEL]);
+  return Markup.keyboard(rows).resize();
 }
 
 export function buildMonthlyKeyboard(
@@ -182,11 +189,15 @@ export function buildMonthlyKeyboard(
   return Markup.keyboard(rows).resize();
 }
 
-export function buildMonthlyEditKeyboard() {
-  return Markup.keyboard([
+export function buildMonthlyEditKeyboard(includeClear = false) {
+  const rows = [
     [MONTHLY_EDIT_ACTION_BUTTONS.slots, MONTHLY_EDIT_ACTION_BUTTONS.schedule],
     [MONTHLY_EDIT_ACTION_BUTTONS.name, MONTHLY_EDIT_ACTION_BUTTONS.q1],
     [MONTHLY_EDIT_ACTION_BUTTONS.q2, MONTHLY_EDIT_ACTION_BUTTONS.q3],
-    [MONTHLY_EDIT_ACTION_BUTTONS.delete, BACK_BUTTON_LABEL],
-  ]).resize();
+    [MONTHLY_EDIT_ACTION_BUTTONS.delete],
+  ] as string[][];
+  if (includeClear) rows.push([CLEAR_QUESTION_BUTTON_LABEL]);
+  rows.push([BACK_BUTTON_LABEL]);
+  return Markup.keyboard(rows).resize();
 }
+
