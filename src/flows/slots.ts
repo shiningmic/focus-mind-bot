@@ -55,10 +55,7 @@ export async function handleSlotsCommand(
 
     await ctx.reply(
       `Timezone updated to ${user.timezone}.\n\n` +
-        'Configure morning/day/evening times.\n' +
-        'Use HH:MM for fixed or HH:MM-HH:MM for a random window.\n' +
-        'Example: /slots 08:30 13:00-15:00 20:15\n' +
-        'Quick timezone change: /slots tz Europe/Kyiv',
+        'Configure morning/day/evening times.',
       buildSlotKeyboard()
     );
     return;
@@ -79,10 +76,7 @@ export async function handleSlotsCommand(
       ...summaries.map((s) => `- ${s}`),
       `- Timezone: ${user.timezone}`,
       '',
-      'Configure morning/day/evening times.',
-      'Use HH:MM for fixed or HH:MM-HH:MM for a random window.',
-      'Example: /slots 08:30 13:00-15:00 20:15',
-      'Quick timezone change: /slots tz Europe/Kyiv',
+      'Configure morning/day/evening times or timezone.',
     ];
 
     await ctx.reply(lines.join('\n'), buildSlotKeyboard());
@@ -118,10 +112,7 @@ export async function handleSlotsCommand(
         user.slots.find((s) => s.slot === 'EVENING')!
       )}\n` +
       `- Timezone: ${user.timezone}\n\n` +
-      'Configure morning/day/evening times.\n' +
-      'Use HH:MM for fixed or HH:MM-HH:MM for a random window.\n' +
-      'Example: /slots 08:30 13:00-15:00 20:15\n' +
-      'Quick timezone change: /slots tz Europe/Kyiv',
+      'Configure morning/day/evening times or timezone.',
     buildSlotKeyboard()
   );
 }
