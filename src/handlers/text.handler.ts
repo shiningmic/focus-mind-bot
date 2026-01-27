@@ -83,9 +83,16 @@ export function registerTextHandler(bot: Telegraf): void {
         const options = args.find(
           (a) => a && typeof a === 'object' && !Array.isArray(a)
         ) as any;
+        let kb = extractKeyboard(args[1]) ?? extractKeyboard(args[2]) ?? null;
+        if (kb && from?.id && isSingleBackKeyboard(kb)) {
+          const prev = popKeyboard(from.id);
+          if (prev) {
+            kb = prev;
+            replaceKeyboardInOptions(options, prev);
+            options.skipNavPush = true;
+          }
+        }
         if (!options?.skipNavPush) {
-          const kb =
-            extractKeyboard(args[1]) ?? extractKeyboard(args[2]) ?? null;
           if (kb && from?.id) {
             pushKeyboard(from.id, kb);
           }
@@ -472,6 +479,29 @@ function extractKeyboard(opt: any): any | null {
   if (opt?.reply_markup?.keyboard) return opt;
   if (opt?.keyboard) return opt;
   return null;
+}
+
+function isSingleBackKeyboard(kb: any): boolean {
+  const payload = kb?.reply_markup?.keyboard ?? kb?.keyboard ?? kb;
+  if (!Array.isArray(payload) || payload.length !== 1) return false;
+  const row = payload[0];
+  return (
+    Array.isArray(row) &&
+    row.length === 1 &&
+    row[0] === BACK_BUTTON_LABEL
+  );
+}
+
+function replaceKeyboardInOptions(options: any, kb: any): void {
+  if (!options) return;
+  if (options?.reply_markup?.keyboard) {
+    options.reply_markup.keyboard =
+      kb?.reply_markup?.keyboard ?? kb?.keyboard ?? kb;
+    return;
+  }
+  if (options?.keyboard) {
+    options.keyboard = kb?.reply_markup?.keyboard ?? kb?.keyboard ?? kb;
+  }
 }
 
 function normalizeBlockName(text: string): string {
