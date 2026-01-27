@@ -2,14 +2,30 @@ import type { Context, Telegraf } from 'telegraf';
 
 import { SessionModel } from '../models/session.model.js';
 import { UserModel } from '../models/user.model.js';
-import { formatSessionExportText } from '../utils/format.js';
+import {
+  formatSessionExportByQuestion,
+  formatSessionExportText,
+} from '../utils/format.js';
 
 export function registerExportCommand(bot: Telegraf): void {
   bot.command('export', async (ctx: Context) => {
     const messageText =
       'text' in (ctx.message ?? {}) ? (ctx.message as any).text ?? '' : '';
-    const [, modeRaw] = messageText.trim().split(/\s+/, 2);
-    const mode = modeRaw?.toLowerCase() === 'json' ? 'json' : 'text';
+    const [, arg1Raw, arg2Raw] = messageText.trim().split(/\s+/, 3);
+    const arg1 = arg1Raw?.toLowerCase();
+    const arg2 = arg2Raw?.toLowerCase();
+    const groupMode =
+      arg1 === 'byd' || arg1 === 'date'
+        ? 'date'
+        : arg1 === 'byq' || arg1 === 'questions'
+        ? 'questions'
+        : 'questions';
+    const mode =
+      arg1 === 'json' || arg2 === 'json'
+        ? 'json'
+        : arg1 === 'txt' || arg2 === 'txt'
+        ? 'txt'
+        : 'text';
 
     const from = ctx.from;
     if (!from) {
@@ -81,12 +97,37 @@ export function registerExportCommand(bot: Telegraf): void {
       };
 
       const json = JSON.stringify(exportData, null, 2);
-      await sendInChunks('Here is your data (JSON):\n```\n' + json + '\n```');
+      const filename = `focus-mind-export-${new Date()
+        .toISOString()
+        .slice(0, 10)}.json`;
+      await ctx.replyWithDocument({
+        source: Buffer.from(json, 'utf8'),
+        filename,
+      });
       return;
     }
 
-    const textExport = formatSessionExportText(sessions);
+    if (mode === 'txt') {
+      const filename = `focus-mind-export-${new Date()
+        .toISOString()
+        .slice(0, 10)}.txt`;
+      const textPlain =
+        groupMode === 'questions'
+          ? formatSessionExportByQuestion(sessions, { markdown: false })
+          : formatSessionExportText(sessions, { markdown: false });
+      const payload = `Here is your data:\n${textPlain}\n`;
+      await ctx.replyWithDocument({
+        source: Buffer.from(payload, 'utf8'),
+        filename,
+      });
+      return;
+    }
+
     const header = 'Here is your data:';
-    await sendInChunks(`${header}\n${textExport}`, 'MarkdownV2');
+    const textMarkdown =
+      groupMode === 'questions'
+        ? formatSessionExportByQuestion(sessions, { markdown: true })
+        : formatSessionExportText(sessions, { markdown: true });
+    await sendInChunks(`${header}\n${textMarkdown}`, 'MarkdownV2');
   });
 }
