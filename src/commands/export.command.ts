@@ -37,10 +37,28 @@ export function registerExportCommand(bot: Telegraf): void {
       return;
     }
 
-    const sendInChunks = async (payload: string) => {
+    const sendInChunks = async (payload: string, parseMode?: 'MarkdownV2') => {
       const maxLen = 3500;
-      for (let i = 0; i < payload.length; i += maxLen) {
-        await ctx.reply(payload.slice(i, i + maxLen));
+      if (!parseMode) {
+        for (let i = 0; i < payload.length; i += maxLen) {
+          await ctx.reply(payload.slice(i, i + maxLen));
+        }
+        return;
+      }
+
+      const lines = payload.split('\n');
+      let chunk = '';
+      for (const line of lines) {
+        const next = chunk ? `${chunk}\n${line}` : line;
+        if (next.length > maxLen && chunk) {
+          await ctx.reply(chunk, { parse_mode: parseMode });
+          chunk = line;
+        } else {
+          chunk = next;
+        }
+      }
+      if (chunk) {
+        await ctx.reply(chunk, { parse_mode: parseMode });
       }
     };
 
@@ -68,6 +86,7 @@ export function registerExportCommand(bot: Telegraf): void {
     }
 
     const textExport = formatSessionExportText(sessions);
-    await sendInChunks('Here is your data:\n' + textExport);
+    const header = 'Here is your data:';
+    await sendInChunks(`${header}\n${textExport}`, 'MarkdownV2');
   });
 }

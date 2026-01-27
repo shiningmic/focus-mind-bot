@@ -71,29 +71,51 @@ export function formatSessionExportText(sessions: SessionDocument[]): string {
   if (!sessions.length) return 'No answers found.';
 
   const lines: string[] = [];
+  const grouped = new Map<string, SessionDocument[]>();
 
   for (const session of sessions) {
-    const label = getSlotLabel(session.slot);
-    lines.push(`${session.dateKey} - ${label} (${session.status})`);
+    const list = grouped.get(session.dateKey) ?? [];
+    list.push(session);
+    grouped.set(session.dateKey, list);
+  }
 
-    if (!session.answers.length) {
-      lines.push('  No answers recorded.');
+  for (const [dateKey, daySessions] of grouped.entries()) {
+    lines.push(`*${escapeMarkdownV2(dateKey)}*`);
+
+    const ordered = [...daySessions].sort(
+      (a, b) => slotOrder[a.slot] - slotOrder[b.slot]
+    );
+
+    for (const session of ordered) {
+      const label = getSlotLabel(session.slot);
+      lines.push(
+        `*${escapeMarkdownV2(label)}* \\(${escapeMarkdownV2(
+          session.status
+        )}\\)`
+      );
+
+      if (!session.answers.length) {
+        lines.push(`_${escapeMarkdownV2('No answers recorded.')}_`);
+        lines.push('');
+        continue;
+      }
+
+      session.answers.forEach((answer, index) => {
+        const question =
+          session.questions.find((q) => q.key === answer.key) ||
+          session.questions[index];
+        const questionText = question?.text ?? `Question ${index + 1}`;
+        const cleanedQuestion =
+          stripEmojis(questionText).trim() || questionText;
+
+        lines.push(
+          `• *${escapeMarkdownV2(cleanedQuestion)}*`,
+          `  → ${escapeMarkdownV2(answer.text)}`
+        );
+      });
+
       lines.push('');
-      continue;
     }
-
-    session.answers.forEach((answer, index) => {
-      const question =
-        session.questions.find((q) => q.key === answer.key) ||
-        session.questions[index];
-      const questionText = question?.text ?? `Question ${index + 1}`;
-      const cleanedQuestion = stripEmojis(questionText).trim() || questionText;
-
-      lines.push(`• ${cleanedQuestion}`);
-      lines.push(`→ ${answer.text}`);
-    });
-
-    lines.push('');
   }
 
   return lines.join('\n').trimEnd();
@@ -142,6 +164,12 @@ export function getSlotLabel(slot: SlotCode): string {
       return 'Evening reflection';
   }
 }
+
+const slotOrder: Record<SlotCode, number> = {
+  MORNING: 0,
+  DAY: 1,
+  EVENING: 2,
+};
 
 export function buildQuestionPrompt(
   slot: SlotCode,
