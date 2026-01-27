@@ -5,6 +5,8 @@ import { UserModel } from '../models/user.model.js';
 import { pendingActions } from '../state/pending.js';
 import {
   pushKeyboard,
+  peekKeyboard,
+  popKeyboard,
   resetNavigation,
 } from '../state/navigation.js';
 import {
@@ -12,6 +14,7 @@ import {
   ADD_MONTHLY_BUTTON,
   ADD_WEEKLY_BUTTON,
   BACK_BUTTON_LABEL,
+  buildBackKeyboard,
   buildStartKeyboard,
   HELP_BUTTON_LABEL,
   QUICK_ACTION_LABELS,
@@ -134,15 +137,29 @@ export function registerTextHandler(bot: Telegraf): void {
         const { handleReflect } = await import(
           '../commands/reflect.command.js'
         );
+        let replyKeyboard: any = undefined;
+        if (from?.id) {
+          const kb =
+            reminderAction.action === 'skip'
+              ? popKeyboard(from.id)
+              : peekKeyboard(from.id);
+          if (kb) {
+            replyKeyboard = { ...kb, skipNavPush: true } as any;
+          } else if (reminderAction.action === 'skip') {
+            replyKeyboard = { ...buildBackKeyboard(), skipNavPush: true } as any;
+          }
+        }
         if (reminderAction.action === 'skip') {
           await handleReflect(ctx, {
             skipPrevious: true,
             targetSlot: reminderAction.slot ?? null,
+            replyKeyboard,
           });
         } else if (reminderAction.action === 'start') {
           await handleReflect(ctx, {
             skipPrevious: false,
             targetSlot: reminderAction.slot ?? null,
+            replyKeyboard,
           });
         }
         return;

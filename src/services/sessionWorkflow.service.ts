@@ -67,7 +67,8 @@ export async function getTodayActiveSessions(
 
 export async function replyWithSessionProgress(
   ctx: Context,
-  session: SessionDocument
+  session: SessionDocument,
+  replyOptions?: any
 ): Promise<void> {
   if (!session.questions.length) {
     await ctx.reply('No questions configured for this slot yet.');
@@ -98,6 +99,7 @@ export async function replyWithSessionProgress(
       question.text,
       currentIndex,
       session.questions.length
-    )
+    ),
+    replyOptions
   );
 }

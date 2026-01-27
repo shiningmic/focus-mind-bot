@@ -12,6 +12,7 @@ import {
 } from '../services/sessionWorkflow.service.js';
 import {
   getDateKeyForTimezone,
+  formatMinutesToTime,
   getTimezoneMinutesNow,
   slotCodeFromString,
 } from '../utils/time.js';
@@ -20,6 +21,7 @@ import type { SlotCode } from '../types/core.js';
 type ReflectOptions = {
   skipPrevious?: boolean;
   targetSlot?: SlotCode | null;
+  replyKeyboard?: any;
 };
 
 export function registerReflectCommand(bot: Telegraf): void {
@@ -52,6 +54,7 @@ export async function handleReflect(
   try {
     const skipPrevious = options?.skipPrevious ?? false;
     const targetSlotFromArgs = options?.targetSlot ?? null;
+    const replyKeyboard = options?.replyKeyboard;
 
     const from = ctx.from;
     if (!from) {
@@ -78,8 +81,74 @@ export async function handleReflect(
     const timezone = user.timezone || DEFAULT_TIMEZONE;
     const todayKey = await expireOldSessions(user._id, timezone);
     const todaySessions = await getTodayActiveSessions(user._id, todayKey);
+    const nowMinutes = getTimezoneMinutesNow(timezone);
 
     let session: SessionDocument | null = null;
+
+    if (targetSlotFromArgs && !skipPrevious) {
+      session =
+        todaySessions.find((s) => s.slot === targetSlotFromArgs) ?? null;
+
+      if (!session) {
+        const targetConfig = configuredSlots.find(
+          (s) => s.slot === targetSlotFromArgs
+        );
+        const targetStartMinutes =
+          targetConfig?.mode === 'FIXED'
+            ? targetConfig.timeMinutes
+            : targetConfig?.mode === 'RANDOM_WINDOW'
+            ? targetConfig.windowStartMinutes
+            : null;
+
+        if (
+          typeof targetStartMinutes === 'number' &&
+          nowMinutes < targetStartMinutes
+        ) {
+          const scheduleHint =
+            targetConfig?.mode === 'RANDOM_WINDOW' &&
+            typeof targetConfig.windowStartMinutes === 'number' &&
+            typeof targetConfig.windowEndMinutes === 'number'
+              ? `${formatMinutesToTime(
+                  targetConfig.windowStartMinutes
+                )}-${formatMinutesToTime(targetConfig.windowEndMinutes)}`
+              : typeof targetStartMinutes === 'number'
+              ? formatMinutesToTime(targetStartMinutes)
+              : 'later';
+
+        await ctx.reply(
+          `This slot hasn't started yet (${scheduleHint}). Please try later or use /reflect skip.`,
+          replyKeyboard
+        );
+        return;
+      }
+    }
+    }
+
+    if (targetSlotFromArgs && skipPrevious) {
+      const alreadyDone = await SessionModel.findOne({
+        userId: user._id,
+        dateKey: todayKey,
+        slot: targetSlotFromArgs,
+        status: { $in: ['completed', 'skipped'] },
+      })
+        .select('_id')
+        .lean()
+        .exec();
+
+      if (alreadyDone) {
+        const slotLabel =
+          targetSlotFromArgs === 'MORNING'
+            ? 'Morning'
+            : targetSlotFromArgs === 'DAY'
+            ? 'Day'
+            : 'Evening';
+        await ctx.reply(
+          `${slotLabel} reflection is already completed today. Please wait for the next slot.`,
+          replyKeyboard
+        );
+        return;
+      }
+    }
 
     if (skipPrevious) {
       if (targetSlotFromArgs) {
@@ -119,7 +188,7 @@ export async function handleReflect(
       }
     }
 
-    if (!session && todaySessions.length && !skipPrevious) {
+    if (!session && todaySessions.length && !skipPrevious && !targetSlotFromArgs) {
       session = todaySessions[0];
     }
 
@@ -142,7 +211,6 @@ export async function handleReflect(
         return;
       }
 
-      const nowMinutes = getTimezoneMinutesNow(timezone);
       const slot =
         targetSlotFromArgs && remainingSlots.find((s) => s.slot === targetSlotFromArgs)
           ? targetSlotFromArgs
@@ -163,7 +231,7 @@ export async function handleReflect(
       );
     }
 
-    await replyWithSessionProgress(ctx, session);
+    await replyWithSessionProgress(ctx, session, replyKeyboard);
   } catch (error) {
     console.error('Error in /reflect handler:', error);
     await ctx.reply('Failed to start reflection. Please try again later.');

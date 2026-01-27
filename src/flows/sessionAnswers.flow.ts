@@ -12,7 +12,7 @@ import {
   buildQuestionPrompt,
   buildSessionCompletionSummary,
 } from '../utils/format.js';
-import { getDateKeyForTimezone } from '../utils/time.js';
+import { getDateKeyForTimezone, getTimezoneMinutesNow } from '../utils/time.js';
 import { DEFAULT_TIMEZONE } from '../config/constants.js';
 import { getOrCreateSessionForUserSlotDate } from '../services/session.service.js';
 import { replyWithSessionProgress } from '../services/sessionWorkflow.service.js';
@@ -88,7 +88,13 @@ export async function handleSessionAnswer(
     await ctx.reply(buildSessionCompletionSummary(session), {
       parse_mode: 'MarkdownV2',
     });
-    await maybeStartNextSameTimeSlot(ctx, user, session.slot, todayKey);
+    await maybeStartNextDueSlotToday(
+      ctx,
+      user,
+      session.slot,
+      todayKey,
+      timezone
+    );
     return;
   }
 
@@ -106,7 +112,13 @@ export async function handleSessionAnswer(
     session.finishedAt = new Date();
     await session.save();
     await ctx.reply('Session already completed.', buildBackKeyboard());
-    await maybeStartNextSameTimeSlot(ctx, user, session.slot, todayKey);
+    await maybeStartNextDueSlotToday(
+      ctx,
+      user,
+      session.slot,
+      todayKey,
+      timezone
+    );
     return;
   }
 
@@ -126,47 +138,82 @@ const slotOrder: Record<'MORNING' | 'DAY' | 'EVENING', number> = {
   EVENING: 2,
 };
 
-async function maybeStartNextSameTimeSlot(
+async function maybeStartNextDueSlotToday(
   ctx: Context,
   user: UserDocument,
   currentSlot: 'MORNING' | 'DAY' | 'EVENING',
-  todayKey: string
+  todayKey: string,
+  timezone: string
 ): Promise<void> {
   const slots = (user.slots as SlotConfig[] | undefined) ?? [];
+  if (!slots.length) return;
 
-  const currentConfig = slots.find(
-    (s) => s.slot === currentSlot && s.mode === 'FIXED'
+  const nowMinutes = getTimezoneMinutesNow(timezone);
+
+  const todaySessions = await SessionModel.find({
+    userId: user._id,
+    dateKey: todayKey,
+  })
+    .select('slot status')
+    .lean()
+    .exec();
+
+  const finishedSlots = new Set(
+    todaySessions
+      .filter((s) => ['completed', 'skipped'].includes(String(s.status)))
+      .map((s) => s.slot as 'MORNING' | 'DAY' | 'EVENING')
   );
-  if (!currentConfig || currentConfig.mode !== 'FIXED') return;
 
-  const sameTimeSlots = slots
+  const activeSessions = todaySessions.filter((s) =>
+    ['pending', 'in_progress'].includes(String(s.status))
+  );
+
+  const remainingSlots = slots.filter((s) => !finishedSlots.has(s.slot));
+  if (!remainingSlots.length) return;
+
+  const dueRemainingSlots = remainingSlots
+    .map((s) => {
+      const startMinutes =
+        s.mode === 'FIXED' ? s.timeMinutes : s.windowStartMinutes;
+      return {
+        slot: s.slot,
+        startMinutes,
+      };
+    })
     .filter(
-      (s) =>
-        s.mode === 'FIXED' &&
-        typeof s.timeMinutes === 'number' &&
-        s.timeMinutes === currentConfig.timeMinutes
+      (s): s is { slot: 'MORNING' | 'DAY' | 'EVENING'; startMinutes: number } =>
+        typeof s.startMinutes === 'number' && s.startMinutes <= nowMinutes
     )
     .sort((a, b) => slotOrder[a.slot] - slotOrder[b.slot]);
 
+  if (!dueRemainingSlots.length) return;
+
   const currentOrder = slotOrder[currentSlot];
-  const next = sameTimeSlots.find((s) => slotOrder[s.slot] > currentOrder);
-  if (!next) return;
+  const nextDue =
+    dueRemainingSlots.find((s) => slotOrder[s.slot] > currentOrder) ??
+    dueRemainingSlots[0];
+
+  const active = activeSessions.find(
+    (s) => s.slot === nextDue.slot
+  ) as { slot: 'MORNING' | 'DAY' | 'EVENING'; status: string } | undefined;
 
   // If there is already an active session for this slot today, continue it
-  const active = await SessionModel.findOne({
-    userId: user._id,
-    slot: next.slot,
-    dateKey: todayKey,
-    status: { $in: ['pending', 'in_progress'] },
-  });
   if (active) {
-    await replyWithSessionProgress(ctx, active);
+    const activeSession = await SessionModel.findOne({
+      userId: user._id,
+      slot: nextDue.slot,
+      dateKey: todayKey,
+      status: { $in: ['pending', 'in_progress'] },
+    });
+    if (activeSession) {
+      await replyWithSessionProgress(ctx, activeSession);
+    }
     return;
   }
 
   const existing = await SessionModel.findOne({
     userId: user._id,
-    slot: next.slot,
+    slot: nextDue.slot,
     dateKey: todayKey,
     status: { $in: ['completed', 'skipped'] },
   })
@@ -176,7 +223,7 @@ async function maybeStartNextSameTimeSlot(
 
   const nextSession = await getOrCreateSessionForUserSlotDate(
     user._id,
-    next.slot,
+    nextDue.slot,
     todayKey
   );
 

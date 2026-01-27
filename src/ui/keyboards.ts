@@ -75,14 +75,9 @@ function slotTitle(slot: SlotCode): string {
 
 export function buildPendingReminderKeyboard(slot: SlotCode) {
   const title = slotTitle(slot);
-  const startLabel = `${REMINDER_BUTTON_LABELS.startPrefix} ${title} reflection`;
   const skipLabel = `${REMINDER_BUTTON_LABELS.skipPrefix} ${title}`;
 
-  return Markup.keyboard([
-    [startLabel],
-    [skipLabel],
-    [BACK_BUTTON_LABEL],
-  ]).resize();
+  return Markup.keyboard([[skipLabel], [BACK_BUTTON_LABEL]]).resize();
 }
 
 export function buildStartKeyboard() {

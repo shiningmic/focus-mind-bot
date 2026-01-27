@@ -3,10 +3,12 @@ import mongoose, { type Types } from 'mongoose';
 import type { Telegraf } from 'telegraf';
 
 import { UserModel, type SlotConfig } from '../models/user.model.js';
+import { QuestionBlockModel } from '../models/questionBlock.model.js';
 import { SessionModel } from '../models/session.model.js';
 import { getOrCreateSessionForUserSlotDate } from '../services/session.service.js';
 import { buildQuestionPrompt } from '../utils/format.js';
 import { buildPendingReminderKeyboard } from '../ui/keyboards.js';
+import { pushKeyboard } from '../state/navigation.js';
 
 let isSchedulerRunning = false;
 const SEND_RETRY_ATTEMPTS = 3;
@@ -148,20 +150,16 @@ function isTelegramBlockError(error: unknown): boolean {
   );
 }
 
-async function markUserAsBlocked(
+async function deleteUserData(
   userId: Types.ObjectId,
   reason: string
 ): Promise<void> {
-  await UserModel.updateOne(
-    { _id: userId },
-    {
-      $set: {
-        isTelegramBlocked: true,
-        lastSendError: reason,
-        lastSendErrorAt: new Date(),
-      },
-    }
-  ).exec();
+  await Promise.all([
+    SessionModel.deleteMany({ userId }).exec(),
+    QuestionBlockModel.deleteMany({ userId }).exec(),
+    UserModel.deleteOne({ _id: userId }).exec(),
+  ]);
+  console.log(`🧹 Deleted user data (${userId}) due to: ${reason}`);
 }
 
 async function clearUserSendError(userId: Types.ObjectId): Promise<void> {
@@ -197,9 +195,9 @@ async function sendMessageWithRetry(
           err.response?.description ??
           err.message ??
           'Telegram blocked/invalid chat';
-        await markUserAsBlocked(userId, reason);
+        await deleteUserData(userId, reason);
         console.warn(
-          `  ⚠️ Cannot deliver to telegramId=${telegramId}. Marked as blocked. Reason: ${reason}`
+          `  ⚠️ Cannot deliver to telegramId=${telegramId}. Deleted user data. Reason: ${reason}`
         );
         return;
       }
@@ -257,7 +255,11 @@ export function startSlotScheduler(bot: Telegraf): void {
 
         if (user.isTelegramBlocked) {
           console.log(
-            `⚠️ User ${user._id} is marked as blocked in Telegram, skipping`
+            `⚠️ User ${user._id} is marked as blocked in Telegram, deleting`
+          );
+          await deleteUserData(
+            user._id as Types.ObjectId,
+            'isTelegramBlocked flag true'
           );
           continue;
         }
@@ -355,12 +357,14 @@ export function startSlotScheduler(bot: Telegraf): void {
                 `${slotLabel[0].toUpperCase()}${slotLabel.slice(
                   1
                 )} reflection is waiting, but previous sessions are still open (${pendingList}).\n` +
-                `Finish them, or choose an option below.`;
+                `Finish them first, or skip previous to start this slot.`;
 
               try {
+                const reminderKeyboard = buildPendingReminderKeyboard(slot);
                 await bot.telegram.sendMessage(user.telegramId, text, {
-                  ...buildPendingReminderKeyboard(slot),
+                  ...reminderKeyboard,
                 });
+                pushKeyboard(user.telegramId, reminderKeyboard);
               } catch (err) {
                 console.warn(
                   `  ⚠️ Failed to send reminder for user ${user._id}:`,
