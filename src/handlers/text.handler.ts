@@ -22,7 +22,6 @@ import {
   SETTINGS_BUTTON_LABELS,
   REMINDER_BUTTON_LABELS,
   buildDailyKeyboard,
-  buildBackKeyboard,
   buildMonthlyKeyboard,
   buildWeeklyKeyboard,
 } from '../ui/keyboards.js';
