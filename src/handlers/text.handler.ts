@@ -5,6 +5,8 @@ import { UserModel } from '../models/user.model.js';
 import { pendingActions } from '../state/pending.js';
 import {
   pushKeyboard,
+  peekKeyboard,
+  popKeyboard,
   resetNavigation,
 } from '../state/navigation.js';
 import {
@@ -12,6 +14,7 @@ import {
   ADD_MONTHLY_BUTTON,
   ADD_WEEKLY_BUTTON,
   BACK_BUTTON_LABEL,
+  buildBackKeyboard,
   buildStartKeyboard,
   HELP_BUTTON_LABEL,
   QUICK_ACTION_LABELS,
@@ -80,9 +83,16 @@ export function registerTextHandler(bot: Telegraf): void {
         const options = args.find(
           (a) => a && typeof a === 'object' && !Array.isArray(a)
         ) as any;
+        let kb = extractKeyboard(args[1]) ?? extractKeyboard(args[2]) ?? null;
+        if (kb && from?.id && isSingleBackKeyboard(kb)) {
+          const prev = popKeyboard(from.id);
+          if (prev) {
+            kb = prev;
+            replaceKeyboardInOptions(options, prev);
+            options.skipNavPush = true;
+          }
+        }
         if (!options?.skipNavPush) {
-          const kb =
-            extractKeyboard(args[1]) ?? extractKeyboard(args[2]) ?? null;
           if (kb && from?.id) {
             pushKeyboard(from.id, kb);
           }
@@ -134,15 +144,29 @@ export function registerTextHandler(bot: Telegraf): void {
         const { handleReflect } = await import(
           '../commands/reflect.command.js'
         );
+        let replyKeyboard: any = undefined;
+        if (from?.id) {
+          const kb =
+            reminderAction.action === 'skip'
+              ? popKeyboard(from.id)
+              : peekKeyboard(from.id);
+          if (kb) {
+            replyKeyboard = { ...kb, skipNavPush: true } as any;
+          } else if (reminderAction.action === 'skip') {
+            replyKeyboard = { ...buildBackKeyboard(), skipNavPush: true } as any;
+          }
+        }
         if (reminderAction.action === 'skip') {
           await handleReflect(ctx, {
             skipPrevious: true,
             targetSlot: reminderAction.slot ?? null,
+            replyKeyboard,
           });
         } else if (reminderAction.action === 'start') {
           await handleReflect(ctx, {
             skipPrevious: false,
             targetSlot: reminderAction.slot ?? null,
+            replyKeyboard,
           });
         }
         return;
@@ -455,6 +479,29 @@ function extractKeyboard(opt: any): any | null {
   if (opt?.reply_markup?.keyboard) return opt;
   if (opt?.keyboard) return opt;
   return null;
+}
+
+function isSingleBackKeyboard(kb: any): boolean {
+  const payload = kb?.reply_markup?.keyboard ?? kb?.keyboard ?? kb;
+  if (!Array.isArray(payload) || payload.length !== 1) return false;
+  const row = payload[0];
+  return (
+    Array.isArray(row) &&
+    row.length === 1 &&
+    row[0] === BACK_BUTTON_LABEL
+  );
+}
+
+function replaceKeyboardInOptions(options: any, kb: any): void {
+  if (!options) return;
+  if (options?.reply_markup?.keyboard) {
+    options.reply_markup.keyboard =
+      kb?.reply_markup?.keyboard ?? kb?.keyboard ?? kb;
+    return;
+  }
+  if (options?.keyboard) {
+    options.keyboard = kb?.reply_markup?.keyboard ?? kb?.keyboard ?? kb;
+  }
 }
 
 function normalizeBlockName(text: string): string {

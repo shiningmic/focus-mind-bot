@@ -18,7 +18,7 @@ export async function sendHelp(ctx: Context): Promise<void> {
     '/daily /weekly /monthly - Configure question sets quickly',
     "/today - Show today's reflection sessions status",
     '/reflect [skip] - Start or resume a reflection session (use "skip" to jump to the latest slot today)',
-    '/export [json|text] - Export your answers',
+    '/export [date|byq|txt|json] - Export your answers (default: by question)',
     '/history - Recent reflection history',
     '/reset - Reset all Focus Mind data (with confirmation)',
     '',

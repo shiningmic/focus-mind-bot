@@ -27,6 +27,11 @@ export function popKeyboard(userId: number): KeyboardMarkup | null {
   return prev;
 }
 
+export function peekKeyboard(userId: number): KeyboardMarkup | null {
+  const stack = navStacks.get(userId) ?? [];
+  return stack.length ? stack[stack.length - 1] : null;
+}
+
 export function resetNavigation(userId: number): void {
   navStacks.delete(userId);
 }

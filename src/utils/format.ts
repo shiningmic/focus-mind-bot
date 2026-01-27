@@ -67,31 +67,137 @@ export function formatMonthSchedule(
   return 'not set';
 }
 
-export function formatSessionExportText(sessions: SessionDocument[]): string {
+export function formatSessionExportText(
+  sessions: SessionDocument[],
+  options?: { markdown?: boolean }
+): string {
   if (!sessions.length) return 'No answers found.';
 
+  const useMarkdown = options?.markdown ?? false;
+  const esc = (text: string) => (useMarkdown ? escapeMarkdownV2(text) : text);
+
   const lines: string[] = [];
+  const grouped = new Map<string, SessionDocument[]>();
 
   for (const session of sessions) {
-    const label = getSlotLabel(session.slot);
-    lines.push(`${session.dateKey} - ${label} (${session.status})`);
+    const list = grouped.get(session.dateKey) ?? [];
+    list.push(session);
+    grouped.set(session.dateKey, list);
+  }
 
-    if (!session.answers.length) {
-      lines.push('  No answers recorded.');
+  for (const [dateKey, daySessions] of grouped.entries()) {
+    lines.push(useMarkdown ? `*${esc(dateKey)}*` : dateKey);
+
+    const ordered = [...daySessions].sort(
+      (a, b) => slotOrder[a.slot] - slotOrder[b.slot]
+    );
+
+    for (const session of ordered) {
+      const label = getSlotLabel(session.slot);
+      if (useMarkdown) {
+        lines.push(`*${esc(label)}* \\(${esc(session.status)}\\)`);
+      } else {
+        lines.push(`${label} (${session.status})`);
+      }
+
+      if (!session.answers.length) {
+        lines.push(useMarkdown ? `_${esc('No answers recorded.')}_` : 'No answers recorded.');
+        lines.push('');
+        continue;
+      }
+
+      session.answers.forEach((answer, index) => {
+        const question =
+          session.questions.find((q) => q.key === answer.key) ||
+          session.questions[index];
+        const questionText = question?.text ?? `Question ${index + 1}`;
+        const cleanedQuestion =
+          stripEmojis(questionText).trim() || questionText;
+
+        if (useMarkdown) {
+          lines.push(`• *${esc(cleanedQuestion)}*`, `  → ${esc(answer.text)}`);
+        } else {
+          lines.push(`- ${cleanedQuestion}`, `  -> ${answer.text}`);
+        }
+      });
+
       lines.push('');
-      continue;
     }
+  }
+
+  return lines.join('\n').trimEnd();
+}
+
+export function formatSessionExportByQuestion(
+  sessions: SessionDocument[],
+  options?: { markdown?: boolean }
+): string {
+  if (!sessions.length) return 'No answers found.';
+
+  const useMarkdown = options?.markdown ?? false;
+  const esc = (text: string) => (useMarkdown ? escapeMarkdownV2(text) : text);
+
+  const grouped = new Map<
+    string,
+    Array<{ dateKey: string; slot: SlotCode; answer: string }>
+  >();
+  const questionSlots = new Map<string, Set<SlotCode>>();
+
+  for (const session of sessions) {
+    const questionMap = new Map<string, string>();
+    session.questions.forEach((q, idx) => {
+      const text = q?.text ?? `Question ${idx + 1}`;
+      questionMap.set(q.key, text);
+    });
 
     session.answers.forEach((answer, index) => {
-      const question =
-        session.questions.find((q) => q.key === answer.key) ||
-        session.questions[index];
-      const questionText = question?.text ?? `Question ${index + 1}`;
-      const cleanedQuestion = stripEmojis(questionText).trim() || questionText;
-
-      lines.push(`• ${cleanedQuestion}`);
-      lines.push(`→ ${answer.text}`);
+      const questionText =
+        questionMap.get(answer.key) ?? `Question ${index + 1}`;
+      const cleanedQuestion =
+        stripEmojis(questionText).trim() || questionText;
+      const list = grouped.get(cleanedQuestion) ?? [];
+      list.push({
+        dateKey: session.dateKey,
+        slot: session.slot,
+        answer: answer.text,
+      });
+      grouped.set(cleanedQuestion, list);
+      const slotSet = questionSlots.get(cleanedQuestion) ?? new Set<SlotCode>();
+      slotSet.add(session.slot);
+      questionSlots.set(cleanedQuestion, slotSet);
     });
+  }
+
+  const lines: string[] = [];
+  const sortedQuestions = [...grouped.keys()].sort((a, b) =>
+    a.localeCompare(b)
+  );
+
+  for (const questionText of sortedQuestions) {
+    const slotSet = questionSlots.get(questionText) ?? new Set<SlotCode>();
+    const slotsLabel = [...slotSet]
+      .sort((a, b) => slotOrder[a] - slotOrder[b])
+      .map((s) => getSlotLabel(s).replace(' reflection', ''))
+      .join(', ');
+    const header = slotsLabel ? `${questionText} (${slotsLabel})` : questionText;
+    lines.push(useMarkdown ? `*${esc(header)}*` : header);
+
+    const entries = grouped.get(questionText) ?? [];
+    entries.sort((a, b) => {
+      if (a.dateKey === b.dateKey) {
+        return slotOrder[a.slot] - slotOrder[b.slot];
+      }
+      return a.dateKey < b.dateKey ? -1 : 1;
+    });
+
+    for (const entry of entries) {
+      const prefix = `${entry.dateKey}`;
+      if (useMarkdown) {
+        lines.push(`• ${esc(prefix)}: ${esc(entry.answer)}`);
+      } else {
+        lines.push(`- ${prefix}: ${entry.answer}`);
+      }
+    }
 
     lines.push('');
   }
@@ -142,6 +248,12 @@ export function getSlotLabel(slot: SlotCode): string {
       return 'Evening reflection';
   }
 }
+
+const slotOrder: Record<SlotCode, number> = {
+  MORNING: 0,
+  DAY: 1,
+  EVENING: 2,
+};
 
 export function buildQuestionPrompt(
   slot: SlotCode,
