@@ -20,6 +20,7 @@ import { registerResetCommand } from './commands/reset.command.js';
 import { registerSetSlotsTimeCommand } from './commands/setSlotsTime.command.js';
 import { registerSessionCommands } from './commands/session.command.js';
 import { registerReflectCommand } from './commands/reflect.command.js';
+import { registerInsightsCommand } from './commands/insights.command.js';
 import { registerTextHandler } from './handlers/text.handler.js';
 
 // Validate required environment variables
@@ -71,6 +72,7 @@ async function main(): Promise<void> {
   registerResetCommand(bot);
   registerSetSlotsTimeCommand(bot);
   registerReflectCommand(bot);
+  registerInsightsCommand(bot);
   registerSessionCommands(bot);
 
   // Single text handler entry point
