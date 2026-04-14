@@ -241,7 +241,7 @@ export function startSlotScheduler(bot: Telegraf): void {
       mongoNotReadyLogged = false;
 
       const users = await UserModel.find({})
-        .select('telegramId timezone slots isTelegramBlocked')
+        .select('telegramId timezone slots notificationsPaused isTelegramBlocked')
         .lean()
         .exec();
 
@@ -252,6 +252,13 @@ export function startSlotScheduler(bot: Telegraf): void {
 
       for (const user of users) {
         const timezone = user.timezone || 'Europe/Kyiv';
+
+        if (user.notificationsPaused) {
+          console.log(
+            `ℹ️ User ${user._id} has notifications paused, skipping all sends`
+          );
+          continue;
+        }
 
         if (user.isTelegramBlocked) {
           console.log(

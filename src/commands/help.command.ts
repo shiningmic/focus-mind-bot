@@ -14,6 +14,7 @@ export async function sendHelp(ctx: Context): Promise<void> {
     '/start - Create profile and show intro',
     '/help - Show this list',
     '/myid - Show your Telegram profile info',
+    '/notifications - Pause or restore bot notifications',
     '/settings - View timezone and slot schedule',
     '/slots <M> <D> <E> - Configure daily slots (HH:MM or HH:MM-HH:MM)',
     '/daily /weekly /monthly - Configure question sets quickly',

@@ -60,6 +60,11 @@ export const REMINDER_BUTTON_LABELS = {
   skipPrefix: '⏭️ Skip previous and start',
 } as const;
 
+export const NOTIFICATIONS_BUTTON_LABELS = {
+  pause: '🔕 Turn off notifications',
+  resume: '🔔 Turn on notifications',
+} as const;
+
 export const CLEAR_QUESTION_BUTTON_LABEL = '? Skip question';
 
 function slotTitle(slot: SlotCode): string {
@@ -213,6 +218,13 @@ export function buildMonthlyEditKeyboard(includeClear = false) {
 export function buildMonthlyCreateKeyboard() {
   return Markup.keyboard([
     [MONTHLY_EDIT_ACTION_BUTTONS.delete],
+    [BACK_BUTTON_LABEL],
+  ]).resize();
+}
+
+export function buildNotificationsKeyboard(paused: boolean) {
+  return Markup.keyboard([
+    [paused ? NOTIFICATIONS_BUTTON_LABELS.resume : NOTIFICATIONS_BUTTON_LABELS.pause],
     [BACK_BUTTON_LABEL],
   ]).resize();
 }

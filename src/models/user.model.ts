@@ -14,6 +14,8 @@ export interface UserDocument extends Document {
   telegramId: number;
   timezone: string;
   slots: SlotConfig[];
+  notificationsPaused?: boolean;
+  notificationsPausedAt?: Date | null;
   isTelegramBlocked?: boolean;
   lastSendError?: string;
   lastSendErrorAt?: Date;
@@ -80,6 +82,16 @@ const UserSchema = new Schema<UserDocument>(
         },
         message: 'User must have exactly 3 slot configurations',
       },
+    },
+    notificationsPaused: {
+      type: Boolean,
+      required: false,
+      default: false,
+    },
+    notificationsPausedAt: {
+      type: Date,
+      required: false,
+      default: null,
     },
     isTelegramBlocked: {
       type: Boolean,
