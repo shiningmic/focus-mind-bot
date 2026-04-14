@@ -95,6 +95,7 @@ Create `.env` file:
 ```env
 TELEGRAM_BOT_TOKEN=your_telegram_bot_token
 MONGODB_URI=your_mongodb_connection_string
+APP_BASE_URL=https://focustime.space
 NODE_ENV=development
 ```
 

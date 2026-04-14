@@ -5,6 +5,8 @@ import { Telegraf } from 'telegraf';
 import { startSlotScheduler } from './scheduler/slotScheduler.js';
 import { registerStartCommand } from './commands/start.command.js';
 import { registerHelpCommand } from './commands/help.command.js';
+import { registerMyIdCommand } from './commands/myid.command.js';
+import { registerNotificationsCommand } from './commands/notifications.command.js';
 import { registerSettingsCommand } from './commands/settings.command.js';
 import { registerSlotsCommand } from './commands/slots.command.js';
 import { registerTimezoneCommand } from './commands/timezone.command.js';
@@ -58,6 +60,8 @@ async function main(): Promise<void> {
   // Register commands
   registerStartCommand(bot);
   registerHelpCommand(bot);
+  registerMyIdCommand(bot);
+  registerNotificationsCommand(bot);
   registerSettingsCommand(bot);
   registerSlotsCommand(bot);
   registerTimezoneCommand(bot);

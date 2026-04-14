@@ -21,6 +21,7 @@ import {
   SETTINGS_BUTTON_LABEL,
   SETTINGS_BUTTON_LABELS,
   REMINDER_BUTTON_LABELS,
+  NOTIFICATIONS_BUTTON_LABELS,
   buildDailyKeyboard,
   buildMonthlyKeyboard,
   buildWeeklyKeyboard,
@@ -123,6 +124,20 @@ export function registerTextHandler(bot: Telegraf): void {
           '../commands/settings.command.js'
         );
         await sendSettings(ctx);
+        return;
+      }
+
+      if (
+        messageText === NOTIFICATIONS_BUTTON_LABELS.pause ||
+        messageText === NOTIFICATIONS_BUTTON_LABELS.resume
+      ) {
+        const { handleNotificationsCommand } = await import(
+          '../commands/notifications.command.js'
+        );
+        await handleNotificationsCommand(
+          ctx,
+          messageText === NOTIFICATIONS_BUTTON_LABELS.pause ? 'off' : 'on'
+        );
         return;
       }
 
